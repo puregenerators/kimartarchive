@@ -1,0 +1,412 @@
+# Artwork Intake Spec
+
+Private intake app for new artwork batches: capture shared exhibition details and per-artwork metadata/images, claim one inventory ID per artwork, generate standardized files, store them in Google Drive, and append one Google Sheets row per artwork.
+
+**Authoritative systems:** Google Sheets (metadata), Google Drive (files).  
+**Stack:** Next.js (App Router), TypeScript, Tailwind CSS, Sharp, Google Sheets API, Google Drive API, Vercel.
+
+**Google resources (display names):**
+
+| Resource | Display name | Runtime identity |
+| --- | --- | --- |
+| Spreadsheet | Artwork Inventory | `GOOGLE_SHEET_ID` |
+| Drive root folder | Kim Artwork Archive | `GOOGLE_DRIVE_ROOT_FOLDER_ID` |
+
+Do **not** resolve the Drive root by name at runtime. Always use `GOOGLE_DRIVE_ROOT_FOLDER_ID`.
+
+---
+
+## Implementation status
+
+| Area | Status |
+| --- | --- |
+| Local batch intake UI | Implemented (no persistence) |
+| Google auth / Sheets / Drive foundation | Implemented |
+| `/setup/google` diagnostics + confirmed setup actions | Implemented |
+| Final artwork submission (claim, upload, sheet row) | **Implemented** — see `docs/SUBMISSION_PIPELINE.md` |
+| Sharp image processing (local test milestone) | **Implemented** (dev preview + reused by submission) |
+| Application password auth | **Not implemented** |
+| Production large-file upload architecture | **Unresolved** (see §12) |
+| Notion dashboard publishing | **Not implemented** (planned extension only) |
+
+Env vars for Google (server-only; never `NEXT_PUBLIC_`):
+
+- `GOOGLE_SERVICE_ACCOUNT_EMAIL`
+- `GOOGLE_PRIVATE_KEY`
+- `GOOGLE_SHEET_ID`
+- `GOOGLE_DRIVE_ROOT_FOLDER_ID`
+- `ARTWORK_SUBMISSION_TARGET` (`test` \| `production`)
+- `GOOGLE_TEST_SHEET_ID` / `GOOGLE_TEST_DRIVE_ROOT_FOLDER_ID` (required when target is `test`)
+
+See `docs/GOOGLE_SETUP.md` and `docs/SUBMISSION_PIPELINE.md`.
+
+**Authoritative archive:** Google Drive (files) and Google Sheets (metadata). Local form state and temp files are discarded after delivery. The app is not a database.
+
+---
+
+## 1. Scope
+
+### Batch-first workflow
+
+Users commonly upload **about 10–12 artwork images together**.
+
+- Start with a **batch image upload** (multi-select or drag-and-drop).
+- Each uploaded source file becomes **exactly one** artwork draft automatically.
+- Do **not** treat multiple uploaded files as multiple views of one artwork.
+- Shared details are entered once and inherited by newly created artworks.
+- Artwork-specific fields (title, medium, dimensions, etc.) remain independently editable.
+- Each artwork becomes its **own** final record: own inventory claim, filenames, Drive folder, three files (master / HR / web), and Sheet row.
+- Shared batch metadata (exhibition, gallery, photographer, etc.) is copied onto each final artwork record, with optional per-artwork overrides for exhibition / gallery / photographer.
+
+A one-image selection remains a valid one-artwork batch.
+
+### On successful batch submission the app must
+
+For **each** artwork in the batch:
+
+1. Accept artwork metadata (with shared defaults / overrides resolved).
+2. Accept exactly one master image file.
+3. Claim the next inventory number (duplicate-safe).
+4. Generate standardized filenames (sequence `01`).
+5. Preserve the original master file (no recompression).
+6. Create high-resolution JPG and web JPG derivatives.
+7. Upload all files to Google Drive in a fixed folder layout.
+8. Append **one** artwork row to the primary sheet tab (including Drive links).
+
+Then show a success summary for the batch (inventory IDs and generated files).
+
+**MVP auth:** gate the app with a single shared application password (`APP_ACCESS_PASSWORD`) and an HTTP-only session cookie. Keep auth isolated so it can be replaced later.
+
+**MVP processing:** local processing is supported first. Production upload architecture for large files is unresolved (see §12).
+
+---
+
+## 2. Explicit non-goals
+
+Out of scope for this app (initial build):
+
+- Full archive management, browsing, search, editing, or deletion of existing artworks
+- Clerk, Supabase Auth, Auth.js, or any full user-account system
+- Any database other than Google Sheets (no Supabase, Prisma, Postgres, etc.)
+- Encoding meaning into inventory IDs (year, type, title)
+- Photographer in filenames (unless deliberately added later)
+- Notion as a required part of intake (optional future extension only)
+- Treating multiple uploaded files as multiple images of **one** artwork (superseded: one image per artwork)
+- Video, PDF, or non-image masters beyond the listed formats
+- Admin retry UI for failed intakes (document as future path only)
+- Choosing Vercel Blob or another temporary storage service before real TIFF testing
+
+---
+
+## 3. Intake fields
+
+### 3.1 Shared batch details
+
+Entered once per batch. Exhibition and Gallery / Venue are optional.
+
+| Field | Notes |
+| --- | --- |
+| Exhibition | Optional |
+| Gallery / Venue | Optional |
+| Exhibition Year | Optional documentation context |
+| Default Artwork Year | Copied onto new artwork cards |
+| Photographer | Shared default; overridable per artwork |
+| Default Location | Copied onto new artwork cards |
+| Default Medium | Free text |
+| Default Status | Fixed list; may be blank |
+| Default Dimension Unit | `in` or `cm`; **default `in`** |
+
+### 3.2 Per-artwork fields
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| Title | Yes | |
+| Artwork Year | Yes | Four-digit; used in filenames and Drive year folder |
+| Medium | Yes | |
+| Height / Width | Yes | Positive numbers |
+| Dimension Unit | Yes | `in` or `cm` |
+| Master image | Yes | Exactly one; TIFF, JPEG, or PNG |
+| Depth | No | Positive when provided |
+| Edition | No | |
+| Status | No | Fixed list; may be blank |
+| Location | No | |
+| Notes | No | |
+
+### 3.3 Per-artwork overrides
+
+Compact overrides (not shown in the main card by default):
+
+- Exhibition
+- Gallery / Venue
+- Photographer
+
+Empty override → use shared value on the final record.
+
+### 3.4 Shared default behavior
+
+- Newly created artwork drafts from uploaded files **inherit** current shared defaults as normal field values.
+- Later edits to shared defaults do **not** silently overwrite artwork values already on cards.
+- Explicit action: **Apply shared details to all artworks** lets the user choose which fields to update (Year, Medium, Status, Dimension Unit, Location, and optionally Exhibition / Gallery / Photographer overrides).
+- That action **never** overwrites Title, Height, Width, Depth, Edition, Notes, or image.
+
+### 3.5 Status values (optional)
+
+- Available
+- Sold
+- Reserved
+- Consigned
+- On Loan
+- Not for Sale
+- Gifted
+- Archived
+
+---
+
+## 4. Google Sheet schema
+
+**Spreadsheet:** Artwork Inventory (`GOOGLE_SHEET_ID`).
+
+| Tab | Purpose |
+| --- | --- |
+| `Artwork Inventory` | One row per successfully completed artwork |
+| `Inventory Claims` | Append-only inventory ID claims (see §5) |
+
+### 4.1 Artwork Inventory columns
+
+Column order is fixed. Shared batch metadata is copied onto each row.
+
+| # | Column |
+| --- | --- |
+| 1 | Inventory ID |
+| 2 | Title |
+| 3 | Year |
+| 4 | Medium |
+| 5 | Height |
+| 6 | Width |
+| 7 | Depth |
+| 8 | Dimension Unit |
+| 9 | Series |
+| 10 | Edition |
+| 11 | Status |
+| 12 | Photographer |
+| 13 | Location |
+| 14 | Exhibition |
+| 15 | Gallery / Venue |
+| 16 | Notes |
+| 17 | Master Filename |
+| 18 | Master File URL |
+| 19 | High Resolution Filename |
+| 20 | High Resolution File URL |
+| 21 | Web Filename |
+| 22 | Web File URL |
+| 23 | Artwork Folder URL |
+| 24 | Created At |
+| 25 | Updated At |
+
+**Series** remains a sheet column for compatibility; the batch UI does not currently collect it (leave blank unless added later).
+
+### 4.2 Filename / URL cells
+
+With one master image per artwork, these cells normally contain a **single** value. Newline-separated multi-value support remains acceptable for forward compatibility.
+
+### 4.3 Inventory Claims columns
+
+| Column | Notes |
+| --- | --- |
+| Claim ID | Unique claim identifier for the row |
+| Inventory ID | Permanent inventory number derived for this claim |
+| Status | Claim lifecycle (e.g. Claimed / Completed / Failed) |
+| Created At | When the claim was appended |
+| Completed At | When processing finished successfully (empty if failed/incomplete) |
+
+---
+
+## 5. Inventory-number rules
+
+- Inventory IDs are **meaningless sequential integers**.
+- Do **not** encode year, medium, or title in the ID.
+- **One inventory claim per artwork** (not one claim per batch).
+- Claim the **full batch’s** inventory numbers **before** processing the first artwork.
+- Use an **append-based claim** on the `Inventory Claims` tab.
+- Derive the next Inventory ID from the **highest existing claimed ID** (any status), beginning at **1000**.
+- A local in-process mutex serializes allocation in one Node process only — it is **not** multi-instance locking. See `docs/SUBMISSION_PIPELINE.md`.
+
+**Local UI preview only:** temporary preview IDs follow current artwork order (`1000`, `1001`, …). These are **not** final claimed IDs. Reordering updates preview IDs and filename plans.
+
+**Permanence:** Once claimed, an inventory number is permanent. If processing fails, mark the claim **Failed** and **leave the gap**. Do **not** reuse the ID. A retry creates a **new** claim and receives a **new** inventory ID.
+
+---
+
+## 6. Filename rules
+
+**Format:**
+
+```text
+YYYY_KO_INVENTORYID_SanitizedTitle_ASSETTYPE_SEQUENCE.ext
+```
+
+**Batch workflow examples (one image → sequence always `01`):**
+
+```text
+2026_KO_1047_BlueGarden_master_01.tif
+2026_KO_1047_BlueGarden_hr_01.jpg
+2026_KO_1047_BlueGarden_web_01.jpg
+```
+
+**Rules:**
+
+- Separators are underscores.
+- Strip spaces and unsafe filename characters from the title segment.
+- Title segment is readable **PascalCase**, not a lowercase URL slug.
+- `YYYY` comes from the artwork Year field.
+- `KO` is a fixed artist/code prefix.
+- Asset types: `master`, `hr`, `web`.
+- For the current one-image-per-artwork workflow, sequence is always **`01`**.
+- Master files keep the **original extension** (normalize `.jpeg` → `.jpg`).
+- HR and web derivatives are always `.jpg`.
+- Do **not** include photographer in the filename unless added later by deliberate decision.
+
+---
+
+## 7. Google Drive structure
+
+**Root folder display name:** Kim Artwork Archive  
+**Runtime root:** configured Drive root folder ID for the active archive target (never discover by name)
+
+```text
+Kim Artwork Archive/          ← archive root folder ID
+  2026_KO_1000_BlueGarden/    ← one folder per artwork (direct child)
+    2026_KO_1000_BlueGarden_master_01.<ext>
+    2026_KO_1000_BlueGarden_hr_01.jpg
+    2026_KO_1000_BlueGarden_web_01.jpg
+  Failed Intake/              ← destination for incomplete intakes
+```
+
+- **One Drive artwork folder per artwork**, named `YYYY_KO_INVENTORYID_SanitizedTitle`.
+- Artwork folders are **flat**: master, HR JPG, and web JPG live directly in the artwork folder (no year parent folder; no `Master/` / `High Resolution/` / `Web/` subfolders).
+- Sheet column **Artwork Folder URL** points at that artwork folder.
+
+---
+
+## 8. Image-processing and upload limits
+
+### 8.1 Derivatives
+
+| Output | Behavior |
+| --- | --- |
+| Master | Preserve original bytes; no recompression or re-encode; normalize `.jpeg`→`.jpg`, `.tiff`→`.tif` |
+| High Resolution JPG | Quality **95**; preserve original pixel dimensions (after orientation); apply EXIF orientation; convert to **sRGB** where supported; flatten transparency on white; progressive JPEG; strip unnecessary metadata but embed sRGB; **never enlarge**; no sharpening |
+| Web JPG | Max **2400px** on longest edge; preserve aspect ratio; **never enlarge**; quality **86**; Lanczos3 resize; mild sharpening only when resized; otherwise same color/flatten/progressive rules as HR |
+
+**Provisional:** HR quality 95 and web quality 86 / 2400px long edge are starting points pending visual testing with Kim’s actual artwork files. See `docs/IMAGE_PROCESSING.md` and `lib/images/config.ts`.
+
+**Initial master formats:** TIFF, JPEG, PNG.
+
+**Local milestone:** `/api/dev/process-artwork-image` processes one artwork at a time for UI preview/download of temporary derivatives. It does not claim inventory IDs or write to Drive/Sheets.
+
+### 8.2 Product upload limits (MVP)
+
+| Limit | Value |
+| --- | --- |
+| Images per artwork | Exactly **1** |
+| Max size per individual file | **250 MB** |
+| Max total source size per batch | **750 MB** |
+| Max artworks per batch | **24** (typical working batch ~10–12) |
+
+Batch upload creates one artwork draft per selected file. Users may add more images later; duplicates (same File object or matching name/size/lastModified) warn before adding.
+
+Previous “5 masters / 750 MB per single-artwork intake” limits are superseded by the one-image-per-artwork batch model. Per-file **250 MB** and batch **750 MB** remain.
+
+These are **product** limits, not proof that Vercel can accept or process them in a single request.
+
+### 8.3 Local vs production processing
+
+- **First local implementation:** support local processing / UI review without upload.
+- **Production:** do **not** send large TIFF files through a normal Vercel server action or API request body. Final production upload must use a **direct or staged upload** approach and must be tested with representative TIFF files before deployment.
+- Do **not** select Vercel Blob or another temporary storage provider in this spec yet (see §12).
+
+---
+
+## 9. End-to-end submission flow
+
+1. Authenticated user uploads a batch of images (commonly ~10–12), each becoming one artwork draft, then enters shared batch details and per-artwork metadata.
+2. On **Submit Batch** (after explicit confirmation), the server runs global preflight and validates the batch.
+3. The server claims inventory IDs for the full batch, then for each artwork sequentially:
+   1. Mark claim Processing; create Drive folder; upload master; generate + upload HR/web; append inventory row; mark claim Completed.
+4. Return a batch completion report (success / failure / reconciliation per artwork).
+5. Local form state and temp files are discarded when the user starts a new batch.
+
+Ideal success criterion per artwork: claim Completed, sheet row exists, Drive files present under the artwork folder.
+
+See `docs/SUBMISSION_PIPELINE.md` for failure isolation and reconciliation-required cases.
+
+---
+
+## 10. Failure and rollback expectations
+
+Fail closed on global preflight. Avoid silent partial archives. Inventory IDs already claimed are never reused.
+
+| Failure point | Expectation |
+| --- | --- |
+| Validation / preflight fails | No claims; no Drive/Sheet artwork writes |
+| Per-artwork processing / Drive / Sheet fails | Continue remaining artworks; best-effort move of that artwork folder into Drive **`Failed Intake`**; mark claim **Failed**; return detailed per-artwork result |
+| Sheet row written but claim Completed update fails | `reconciliation_required` — manual claim correction; do not auto-retry |
+
+**Compensation preference:** move incomplete artwork folders to `Failed Intake` when practical. Do not auto-delete masters.
+
+Details: `docs/SUBMISSION_PIPELINE.md`.
+
+**Future (not in first UI):** an admin retry path for failed intakes.
+
+---
+
+## 11. Private access (MVP)
+
+- Single shared password in env: `APP_ACCESS_PASSWORD`.
+- After successful login, store access in a **secure, HTTP-only, SameSite** cookie.
+- Keep authentication code isolated so it can later be replaced with a proper user account system.
+- Do **not** use Clerk, Supabase Auth, or Auth.js for the initial build.
+
+---
+
+## 12. Unresolved production concern — large TIFF / Vercel limits
+
+**Status: unresolved. Do not treat as decided.**
+
+Large TIFF uploads and Sharp processing may exceed normal Vercel request body, duration, and memory limits even when files are within the MVP product limits (250 MB / file).
+
+- Do **not** assume a normal Vercel server action or Route Handler can receive full master binaries.
+- Do **not** choose Vercel Blob or another temporary storage service yet.
+- Local implementation may process files available on disk / local upload for development.
+- Decide production upload architecture **after** testing representative master files (especially large TIFFs) against the target runtime.
+
+---
+
+## 13. Future Notion extension point
+
+A later **optional** step may create a Notion database entry per artwork, using the **web JPG** as a preview image.
+
+- Notion is **not** authoritative.
+- Google Sheets and Google Drive remain the source of truth.
+- Notion must not be required for a successful intake.
+
+---
+
+## 14. Environment variables (initial set)
+
+| Variable | Purpose |
+| --- | --- |
+| `APP_ACCESS_PASSWORD` | Shared MVP app password (auth not implemented yet) |
+| `GOOGLE_SERVICE_ACCOUNT_EMAIL` | Service account email |
+| `GOOGLE_PRIVATE_KEY` | Service account private key (PEM; `\n` normalized) |
+| `GOOGLE_SHEET_ID` | Production Artwork Inventory spreadsheet ID |
+| `GOOGLE_DRIVE_ROOT_FOLDER_ID` | Production Kim Artwork Archive root folder ID |
+| `ARTWORK_SUBMISSION_TARGET` | `test` or `production` |
+| `GOOGLE_TEST_SHEET_ID` | Test spreadsheet ID (required when target is `test`) |
+| `GOOGLE_TEST_DRIVE_ROOT_FOLDER_ID` | Test Drive root ID (required when target is `test`) |
+
+---
+
+## 15. Submission algorithm documentation
+
+The claim/append algorithm, mutex limitations, failure isolation, and test/production targets are documented in **`docs/SUBMISSION_PIPELINE.md`**.

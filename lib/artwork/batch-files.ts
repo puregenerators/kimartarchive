@@ -1,0 +1,288 @@
+import {
+  MAX_ARTWORKS_PER_BATCH,
+  MAX_BATCH_BYTES,
+  MAX_FILE_BYTES,
+  createArtworkDraft,
+  type ArtworkDraft,
+  type ArtworkImage,
+  type BatchDraft,
+  type BatchSharedDetails,
+} from "@/lib/artwork/types";
+import {
+  evaluateSingleImage,
+  formatFileSize,
+  isTiffFile,
+} from "@/lib/artwork/validation";
+
+export type FileLike = {
+  name: string;
+  size: number;
+  lastModified: number;
+  type?: string;
+};
+
+/** Stable identity for duplicate detection (not content hashing). */
+export function fileIdentityKey(file: FileLike): string {
+  return `${file.name}\0${file.size}\0${file.lastModified}`;
+}
+
+/**
+ * Derive a suggested title from a source filename.
+ * Light transform only: strip extension, replace _/- with spaces, trim.
+ * Does not aggressively re-case unusual titles.
+ */
+export function suggestTitleFromFilename(filename: string): string {
+  const base = filename.replace(/^.*[/\\]/, "");
+  const withoutExt = base.replace(/\.[^.]+$/u, "");
+  return withoutExt
+    .replace(/[_-]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+export function totalBatchBytes(artworks: readonly ArtworkDraft[]): number {
+  return artworks.reduce((sum, artwork) => {
+    return sum + (artwork.image?.file.size ?? 0);
+  }, 0);
+}
+
+export function revokeArtworkImagePreview(image: ArtworkImage | null): void {
+  if (image?.previewUrl) {
+    URL.revokeObjectURL(image.previewUrl);
+  }
+}
+
+export function revokeArtworkDraftImage(artwork: ArtworkDraft): void {
+  revokeArtworkImagePreview(artwork.image);
+}
+
+export function createArtworkImageFromFile(
+  file: File,
+  options?: { createPreviewUrl?: boolean },
+): ArtworkImage {
+  const tiff = isTiffFile(file);
+  const createPreview = options?.createPreviewUrl ?? true;
+  return {
+    file,
+    previewUrl: !tiff && createPreview ? URL.createObjectURL(file) : null,
+    isTiff: tiff,
+  };
+}
+
+export type DuplicateMatch = {
+  file: File;
+  existingArtworkId: string;
+  existingFilename: string;
+};
+
+export type AppendFilesRejection =
+  | { code: "unsupported"; file: File; message: string }
+  | { code: "file_too_large"; file: File; message: string }
+  | { code: "batch_too_large"; message: string }
+  | { code: "batch_count"; message: string };
+
+export type AppendFilesResult = {
+  batch: BatchDraft;
+  added: ArtworkDraft[];
+  rejected: AppendFilesRejection[];
+  duplicates: DuplicateMatch[];
+  /** Files that are ready to add if the user confirms duplicates. */
+  pendingDuplicates: File[];
+};
+
+function findDuplicateArtwork(
+  artworks: readonly ArtworkDraft[],
+  file: File,
+): ArtworkDraft | undefined {
+  const key = fileIdentityKey(file);
+  return artworks.find((artwork) => {
+    if (!artwork.image) return false;
+    // Exact same File object reference
+    if (artwork.image.file === file) return true;
+    return fileIdentityKey(artwork.image.file) === key;
+  });
+}
+
+/**
+ * Append files as new artwork drafts at the end of the batch.
+ * Does not mutate existing drafts. Order of accepted files is preserved.
+ *
+ * When duplicates are found and `allowDuplicates` is false, those files are
+ * reported in `duplicates` / `pendingDuplicates` and not added.
+ */
+export function appendFilesToBatch(
+  batch: BatchDraft,
+  files: readonly File[],
+  options?: {
+    allowDuplicates?: boolean;
+    createPreviewUrls?: boolean;
+    shared?: BatchSharedDetails;
+  },
+): AppendFilesResult {
+  const shared = options?.shared ?? batch.shared;
+  const allowDuplicates = options?.allowDuplicates ?? false;
+  const createPreviewUrls = options?.createPreviewUrls ?? true;
+
+  const rejected: AppendFilesRejection[] = [];
+  const duplicates: DuplicateMatch[] = [];
+  const pendingDuplicates: File[] = [];
+  const added: ArtworkDraft[] = [];
+  const nextArtworks = [...batch.artworks];
+
+  let runningBytes = totalBatchBytes(nextArtworks);
+
+  for (const file of files) {
+    const existing = findDuplicateArtwork(nextArtworks, file);
+    if (existing && !allowDuplicates) {
+      duplicates.push({
+        file,
+        existingArtworkId: existing.id,
+        existingFilename: existing.image?.file.name ?? file.name,
+      });
+      pendingDuplicates.push(file);
+      continue;
+    }
+
+    const evaluated = evaluateSingleImage(file);
+    if (!evaluated.ok) {
+      const isSize =
+        file.size > MAX_FILE_BYTES &&
+        evaluated.error.toLowerCase().includes("250");
+      rejected.push({
+        code: isSize ? "file_too_large" : "unsupported",
+        file,
+        message: evaluated.error,
+      });
+      continue;
+    }
+
+    if (nextArtworks.length + added.length >= MAX_ARTWORKS_PER_BATCH) {
+      rejected.push({
+        code: "batch_count",
+        message: `A batch can include at most ${MAX_ARTWORKS_PER_BATCH} artworks.`,
+      });
+      // Stop accepting further files once the count cap is hit.
+      break;
+    }
+
+    if (runningBytes + file.size > MAX_BATCH_BYTES) {
+      rejected.push({
+        code: "batch_too_large",
+        message: `Adding ${file.name} would exceed the ${formatFileSize(MAX_BATCH_BYTES)} batch limit.`,
+      });
+      continue;
+    }
+
+    const suggested = suggestTitleFromFilename(file.name);
+    const image = createArtworkImageFromFile(evaluated.file, {
+      createPreviewUrl: createPreviewUrls,
+    });
+    const draft = createArtworkDraft(shared, {
+      image,
+      title: suggested,
+      titleSuggestedFromFilename: suggested.length > 0,
+    });
+
+    added.push(draft);
+    nextArtworks.push(draft);
+    runningBytes += file.size;
+  }
+
+  return {
+    batch: {
+      ...batch,
+      shared,
+      artworks: nextArtworks,
+    },
+    added,
+    rejected,
+    duplicates,
+    pendingDuplicates,
+  };
+}
+
+/**
+ * Replace the image on one artwork. Returns a new draft; caller must revoke
+ * the previous preview URL and invalidate processing for this artwork only.
+ */
+export function replaceArtworkImage(
+  artwork: ArtworkDraft,
+  file: File,
+  options?: { createPreviewUrl?: boolean },
+):
+  | { ok: true; artwork: ArtworkDraft; previousImage: ArtworkImage | null }
+  | { ok: false; error: string } {
+  const evaluated = evaluateSingleImage(file);
+  if (!evaluated.ok) {
+    return { ok: false, error: evaluated.error };
+  }
+
+  const suggested = suggestTitleFromFilename(evaluated.file.name);
+  const image = createArtworkImageFromFile(evaluated.file, {
+    createPreviewUrl: options?.createPreviewUrl ?? true,
+  });
+
+  const shouldRefreshSuggestedTitle =
+    artwork.titleSuggestedFromFilename || !artwork.title.trim();
+
+  return {
+    ok: true,
+    previousImage: artwork.image,
+    artwork: {
+      ...artwork,
+      image,
+      title: shouldRefreshSuggestedTitle ? suggested : artwork.title,
+      titleSuggestedFromFilename: shouldRefreshSuggestedTitle
+        ? suggested.length > 0
+        : false,
+    },
+  };
+}
+
+export function reorderArtworks(
+  artworks: readonly ArtworkDraft[],
+  id: string,
+  direction: -1 | 1,
+): ArtworkDraft[] {
+  const index = artworks.findIndex((artwork) => artwork.id === id);
+  const nextIndex = index + direction;
+  if (index < 0 || nextIndex < 0 || nextIndex >= artworks.length) {
+    return [...artworks];
+  }
+  const next = [...artworks];
+  const [item] = next.splice(index, 1);
+  next.splice(nextIndex, 0, item);
+  return next;
+}
+
+export function removeArtworkFromList(
+  artworks: readonly ArtworkDraft[],
+  id: string,
+): { artworks: ArtworkDraft[]; removed: ArtworkDraft | null } {
+  const removed = artworks.find((artwork) => artwork.id === id) ?? null;
+  return {
+    artworks: artworks.filter((artwork) => artwork.id !== id),
+    removed,
+  };
+}
+
+/** Clear processing state for a single artwork ID only. */
+export function clearProcessingForArtwork<T>(
+  processingByArtworkId: Record<string, T>,
+  artworkId: string,
+): Record<string, T> {
+  if (!(artworkId in processingByArtworkId)) return processingByArtworkId;
+  const next = { ...processingByArtworkId };
+  delete next[artworkId];
+  return next;
+}
+
+export function artworkNeedsMetadata(artwork: ArtworkDraft): boolean {
+  return (
+    !artwork.title.trim() ||
+    !artwork.year.trim() ||
+    !artwork.medium.trim() ||
+    !artwork.height.trim() ||
+    !artwork.width.trim()
+  );
+}
