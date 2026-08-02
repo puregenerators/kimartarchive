@@ -7,7 +7,7 @@ export default function Home() {
         Kim Artwork Archive
       </p>
       <h1 className="mt-4 font-display text-5xl tracking-tight text-[var(--ink)] sm:text-6xl">
-        Artwork intake
+        Artwork Intake Tool
       </h1>
       <p className="mt-5 max-w-xl text-[var(--muted)] leading-relaxed">
         Prepare a batch of artworks for the archive. This milestone is local

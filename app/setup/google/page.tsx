@@ -32,20 +32,6 @@ export default async function SetupGooglePage() {
         >
           Archive setup
         </Link>
-        {" · "}
-        <Link
-          href="/"
-          className="text-[var(--accent)] underline-offset-2 hover:underline"
-        >
-          Back home
-        </Link>
-        {" · "}
-        <Link
-          href="/new-artwork"
-          className="text-[var(--accent)] underline-offset-2 hover:underline"
-        >
-          Add New Artwork
-        </Link>
       </p>
 
       <div className="mt-10">

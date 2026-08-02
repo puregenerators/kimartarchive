@@ -253,305 +253,318 @@ export function ArchiveSetupClient({
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs text-[var(--muted)]">
-          Checked at {new Date(dropbox.checkedAt).toLocaleString()}
-        </p>
-        <button
-          type="button"
-          onClick={refresh}
-          disabled={pending}
-          className="border border-[var(--line)] bg-[var(--surface-elevated)] px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--ink)] disabled:opacity-50"
-        >
-          Refresh
-        </button>
-      </div>
-
-      {message ? (
-        <div
-          role="status"
-          className={[
-            "border px-4 py-3 text-sm",
-            message.ok
-              ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--ink)]"
-              : "border-[var(--danger)] bg-[var(--danger-soft)] text-[var(--danger)]",
-          ].join(" ")}
-        >
-          {message.message}
-        </div>
-      ) : null}
-
-      <Card title="Overall Status">
-        <StatusPill ok={overall.ready} label={overall.label} />
-        <p className="text-sm text-[var(--ink)]">{overall.explanation}</p>
-        <dl>
-          <Row
-            label="Google Sheets"
-            value={
-              <StatusPill
-                ok={overall.googleSheets === "Connected"}
-                label={overall.googleSheets}
-              />
-            }
-          />
-          <Row
-            label="Dropbox"
-            value={
-              <StatusPill
-                ok={overall.dropbox === "Connected"}
-                label={overall.dropbox}
-              />
-            }
-          />
-          <Row
-            label="Archive Folder Ready"
-            value={
-              <StatusPill
-                ok={overall.archiveFolderReady}
-                label={overall.archiveFolderReady ? "Ready" : "Not ready"}
-              />
-            }
-          />
-        </dl>
-        <p className="text-xs text-[var(--muted)]">
-          Status is green only when both Google Sheets and Dropbox pass.
-        </p>
-      </Card>
-
-      <Card title="Google Sheets">
-        <StatusPill
-          ok={sheetsReady}
-          label={sheetsReady ? "Connected" : "Not connected"}
-        />
-        {google.sheets.ok ? (
-          <dl>
-            <Row label="Spreadsheet title" value={google.sheets.title ?? "—"} />
-            <Row
-              label="Permission"
-              value={google.sheets.permission?.label ?? "Unknown"}
-            />
-          </dl>
-        ) : (
-          <p className="text-[var(--danger)]">
-            {google.sheets.error
-              ? `${google.sheets.error.code}: ${google.sheets.error.message}`
-              : "Google Sheets is not reachable."}
+    <div>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-[var(--muted)]">
+            Checked at {new Date(dropbox.checkedAt).toLocaleString()}
           </p>
-        )}
-        <p className="text-xs text-[var(--muted)]">
-          Google Sheets stores permanent artwork metadata. File binaries will
-          live in Dropbox.{" "}
-          <Link
-            href="/setup/google"
-            className="text-[var(--accent)] underline-offset-2 hover:underline"
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={pending}
+            className="border border-[var(--line)] bg-[var(--surface-elevated)] px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--ink)] disabled:opacity-50"
           >
-            Open Google sheet tools
-          </Link>
-        </p>
-      </Card>
-
-      <Card title="Dropbox">
-        <StatusPill
-          ok={dropboxReady}
-          label={
-            dropboxReady
-              ? "Ready"
-              : dropboxConnected
-                ? "Incomplete"
-                : "Not connected"
-          }
-        />
-
-        <dl>
-          <Row
-            label="Connected"
-            value={dropboxConnected ? "Yes" : "No"}
-          />
-          <Row
-            label="Account"
-            value={
-              dropbox.account
-                ? `${dropbox.account.displayName} · ${dropbox.account.email}`
-                : "—"
-            }
-          />
-          {dropbox.account ? (
-            <Row
-              label="Dropbox account ID"
-              value={dropbox.account.accountId}
-            />
-          ) : null}
-          <Row
-            label="Archive folder"
-            value={dropbox.archiveFolder.displayPath}
-          />
-          <Row
-            label="Permission test"
-            value={
-              dropbox.archiveFolder.accessible
-                ? "App Folder writable"
-                : dropboxConnected
-                  ? "Failed — run diagnostics"
-                  : "Not run"
-            }
-          />
-        </dl>
-
-        {!dropbox.env.ready ? (
-          <p className="text-sm text-[var(--danger)]">
-            Missing env: {dropbox.env.missing.join(", ")}. See
-            docs/DROPBOX_SETUP.md.
-          </p>
-        ) : null}
-
-        <div className="flex flex-wrap gap-2 pt-2">
-          {!dropboxConnected ? (
-            <ActionButton
-              href="/api/auth/dropbox/connect"
-              primary
-              disabled={!dropbox.env.ready || pending}
-            >
-              Connect Dropbox
-            </ActionButton>
-          ) : (
-            <>
-              <ActionButton
-                href="/api/auth/dropbox/connect"
-                disabled={!dropbox.env.ready || pending}
-              >
-                Reconnect
-              </ActionButton>
-              <ActionButton
-                disabled={pending}
-                onClick={() => setConfirmDisconnect(true)}
-              >
-                Disconnect
-              </ActionButton>
-            </>
-          )}
-          <ActionButton disabled={pending} onClick={runDiagnostics}>
-            Run Diagnostics
-          </ActionButton>
-          <ActionButton
-            disabled={!dropboxConnected || pending || uploadTestPending}
-            onClick={runUploadTest}
-          >
-            {uploadTestPending
-              ? "Running Upload Test…"
-              : "Run Dropbox Upload Test"}
-          </ActionButton>
+            Refresh
+          </button>
         </div>
 
-        {uploadTestResult ? (
+        {message ? (
           <div
+            role="status"
             className={[
-              "mt-3 space-y-2 border px-3 py-3",
-              uploadTestResult.success
-                ? "border-[var(--accent)] bg-[var(--accent-soft)]"
-                : "border-[var(--danger)] bg-[var(--danger-soft)]",
+              "border px-4 py-3 text-sm",
+              message.ok
+                ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--ink)]"
+                : "border-[var(--danger)] bg-[var(--danger-soft)] text-[var(--danger)]",
             ].join(" ")}
           >
-            <p className="text-sm text-[var(--ink)]">
-              {uploadTestResult.success
-                ? "Dropbox upload integration test passed."
-                : uploadTestResult.message}
-            </p>
-            <ul className="space-y-1 text-sm text-[var(--ink)]">
-              {(
-                [
-                  ["folderCreated", "Folder created"],
-                  ["uploadSucceeded", "File uploaded"],
-                  ["metadataVerified", "Metadata verified"],
-                  ["sharedLinkCreated", "Shared link created"],
-                  ["downloadVerified", "Download verified"],
-                  ["fileDeleted", "File deleted"],
-                  ["folderDeleted", "Folder deleted"],
-                ] as const satisfies ReadonlyArray<readonly [UploadTestStepKey, string]>
-              ).map(([key, label]) => {
-                const ok = uploadTestResult[key];
-                const failedHere =
-                  !uploadTestResult.success &&
-                  uploadTestResult.failedOperationLabel === label;
-                return (
-                  <li key={key} className="flex items-center gap-2">
-                    <span aria-hidden="true">{ok ? "✓" : failedHere ? "✗" : "·"}</span>
-                    <span
-                      className={
-                        ok
-                          ? "text-[var(--ink)]"
-                          : failedHere
-                            ? "text-[var(--danger)]"
-                            : "text-[var(--muted)]"
-                      }
-                    >
-                      {label}
-                      {failedHere ? " — failed" : ""}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-            {!uploadTestResult.success ? (
-              <p className="text-xs text-[var(--danger)]">
-                Failed operation: {uploadTestResult.failedOperationLabel}
-              </p>
-            ) : null}
+            {message.message}
           </div>
         ) : null}
 
-        {confirmDisconnect ? (
-          <div className="space-y-2 bg-[var(--danger-soft)] p-3">
-            <p className="text-sm text-[var(--danger)]">
-              Remove the local Dropbox refresh token? You will need to Connect
-              again before uploads can use Dropbox.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <ActionButton primary disabled={pending} onClick={runDisconnect}>
-                Confirm disconnect
-              </ActionButton>
-              <ActionButton onClick={() => setConfirmDisconnect(false)}>
-                Cancel
-              </ActionButton>
-            </div>
-          </div>
-        ) : null}
-
-        {!dropboxConnected && dropbox.env.ready ? (
-          <p className="rounded border border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-3 text-sm text-[var(--ink)]">
-            Dropbox is not connected. Authorize once with{" "}
-            <strong className="font-medium">Connect Dropbox</strong> — the app
-            stores a refresh token locally and reconnects automatically.
+        <Card title="Overall Status">
+          <StatusPill ok={overall.ready} label={overall.label} />
+          <p className="text-sm text-[var(--ink)]">{overall.explanation}</p>
+          <dl>
+            <Row
+              label="Google Sheets"
+              value={
+                <StatusPill
+                  ok={overall.googleSheets === "Connected"}
+                  label={overall.googleSheets}
+                />
+              }
+            />
+            <Row
+              label="Dropbox"
+              value={
+                <StatusPill
+                  ok={overall.dropbox === "Connected"}
+                  label={overall.dropbox}
+                />
+              }
+            />
+            <Row
+              label="Archive Folder Ready"
+              value={
+                <StatusPill
+                  ok={overall.archiveFolderReady}
+                  label={overall.archiveFolderReady ? "Ready" : "Not ready"}
+                />
+              }
+            />
+          </dl>
+          <p className="text-xs text-[var(--muted)]">
+            Status is green only when both Google Sheets and Dropbox pass.
           </p>
-        ) : null}
-      </Card>
+        </Card>
 
-      <Card title="Diagnostics">
-        <StatusPill
-          ok={dropbox.overall.ready}
-          label={dropbox.overall.label}
-        />
-        <p className="text-sm text-[var(--ink)]">{dropbox.overall.explanation}</p>
-        <ul className="space-y-2">
-          {dropbox.steps.map((s) => (
-            <li
-              key={s.id}
-              className="flex flex-col gap-1 border-b border-[var(--line)] py-2 sm:flex-row sm:items-start sm:justify-between"
+        <Card title="Google Sheets">
+          <StatusPill
+            ok={sheetsReady}
+            label={sheetsReady ? "Connected" : "Not connected"}
+          />
+          {google.sheets.ok ? (
+            <dl>
+              <Row label="Spreadsheet title" value={google.sheets.title ?? "—"} />
+              <Row
+                label="Permission"
+                value={google.sheets.permission?.label ?? "Unknown"}
+              />
+            </dl>
+          ) : (
+            <p className="text-[var(--danger)]">
+              {google.sheets.error
+                ? `${google.sheets.error.code}: ${google.sheets.error.message}`
+                : "Google Sheets is not reachable."}
+            </p>
+          )}
+          <p className="text-xs text-[var(--muted)]">
+            Google Sheets stores permanent artwork metadata. File binaries will
+            live in Dropbox.{" "}
+            <Link
+              href="/setup/google"
+              className="text-[var(--accent)] underline-offset-2 hover:underline"
             >
-              <div>
-                <p className="text-sm text-[var(--ink)]">{s.label}</p>
-                <p className="text-xs text-[var(--muted)]">{s.message}</p>
+              Open Google sheet tools
+            </Link>
+          </p>
+        </Card>
+
+        <Card title="Dropbox">
+          <StatusPill
+            ok={dropboxReady}
+            label={
+              dropboxReady
+                ? "Ready"
+                : dropboxConnected
+                  ? "Incomplete"
+                  : "Not connected"
+            }
+          />
+
+          <dl>
+            <Row
+              label="Connected"
+              value={dropboxConnected ? "Yes" : "No"}
+            />
+            <Row
+              label="Account"
+              value={
+                dropbox.account
+                  ? `${dropbox.account.displayName} · ${dropbox.account.email}`
+                  : "—"
+              }
+            />
+            {dropbox.account ? (
+              <Row
+                label="Dropbox account ID"
+                value={dropbox.account.accountId}
+              />
+            ) : null}
+            <Row
+              label="Archive folder"
+              value={dropbox.archiveFolder.displayPath}
+            />
+            <Row
+              label="Permission test"
+              value={
+                dropbox.archiveFolder.accessible
+                  ? "App Folder writable"
+                  : dropboxConnected
+                    ? "Failed — run diagnostics"
+                    : "Not run"
+              }
+            />
+          </dl>
+
+          {!dropbox.env.ready ? (
+            <p className="text-sm text-[var(--danger)]">
+              Missing env: {dropbox.env.missing.join(", ")}. See
+              docs/DROPBOX_SETUP.md.
+            </p>
+          ) : null}
+
+          <div className="flex flex-wrap gap-2 pt-2">
+            {!dropboxConnected ? (
+              <ActionButton
+                href="/api/auth/dropbox/connect"
+                primary
+                disabled={!dropbox.env.ready || pending}
+              >
+                Connect Dropbox
+              </ActionButton>
+            ) : (
+              <>
+                <ActionButton
+                  href="/api/auth/dropbox/connect"
+                  disabled={!dropbox.env.ready || pending}
+                >
+                  Reconnect
+                </ActionButton>
+                <ActionButton
+                  disabled={pending}
+                  onClick={() => setConfirmDisconnect(true)}
+                >
+                  Disconnect
+                </ActionButton>
+              </>
+            )}
+            <ActionButton disabled={pending} onClick={runDiagnostics}>
+              Run Diagnostics
+            </ActionButton>
+            <ActionButton
+              disabled={!dropboxConnected || pending || uploadTestPending}
+              onClick={runUploadTest}
+            >
+              {uploadTestPending
+                ? "Running Upload Test…"
+                : "Run Dropbox Upload Test"}
+            </ActionButton>
+          </div>
+
+          {uploadTestResult ? (
+            <div
+              className={[
+                "mt-3 space-y-2 border px-3 py-3",
+                uploadTestResult.success
+                  ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+                  : "border-[var(--danger)] bg-[var(--danger-soft)]",
+              ].join(" ")}
+            >
+              <p className="text-sm text-[var(--ink)]">
+                {uploadTestResult.success
+                  ? "Dropbox upload integration test passed."
+                  : uploadTestResult.message}
+              </p>
+              <ul className="space-y-1 text-sm text-[var(--ink)]">
+                {(
+                  [
+                    ["folderCreated", "Folder created"],
+                    ["uploadSucceeded", "File uploaded"],
+                    ["metadataVerified", "Metadata verified"],
+                    ["sharedLinkCreated", "Shared link created"],
+                    ["downloadVerified", "Download verified"],
+                    ["fileDeleted", "File deleted"],
+                    ["folderDeleted", "Folder deleted"],
+                  ] as const satisfies ReadonlyArray<readonly [UploadTestStepKey, string]>
+                ).map(([key, label]) => {
+                  const ok = uploadTestResult[key];
+                  const failedHere =
+                    !uploadTestResult.success &&
+                    uploadTestResult.failedOperationLabel === label;
+                  return (
+                    <li key={key} className="flex items-center gap-2">
+                      <span aria-hidden="true">{ok ? "✓" : failedHere ? "✗" : "·"}</span>
+                      <span
+                        className={
+                          ok
+                            ? "text-[var(--ink)]"
+                            : failedHere
+                              ? "text-[var(--danger)]"
+                              : "text-[var(--muted)]"
+                        }
+                      >
+                        {label}
+                        {failedHere ? " — failed" : ""}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+              {!uploadTestResult.success ? (
+                <p className="text-xs text-[var(--danger)]">
+                  Failed operation: {uploadTestResult.failedOperationLabel}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {confirmDisconnect ? (
+            <div className="space-y-2 bg-[var(--danger-soft)] p-3">
+              <p className="text-sm text-[var(--danger)]">
+                Remove the local Dropbox refresh token? You will need to Connect
+                again before uploads can use Dropbox.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <ActionButton primary disabled={pending} onClick={runDisconnect}>
+                  Confirm disconnect
+                </ActionButton>
+                <ActionButton onClick={() => setConfirmDisconnect(false)}>
+                  Cancel
+                </ActionButton>
               </div>
-              <StatusPill ok={s.ok} label={s.ok ? "Pass" : "Fail"} />
-            </li>
-          ))}
-        </ul>
-        <p className="text-xs text-[var(--muted)]">
-          Probes use a temporary{" "}
-          <code className="text-[var(--ink)]">.kimartarchive-diagnostics</code>{" "}
-          folder inside the App Folder. Artwork paths are not modified.
-        </p>
-      </Card>
+            </div>
+          ) : null}
+
+          {!dropboxConnected && dropbox.env.ready ? (
+            <p className="rounded border border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-3 text-sm text-[var(--ink)]">
+              Dropbox is not connected. Authorize once with{" "}
+              <strong className="font-medium">Connect Dropbox</strong> — the app
+              stores a refresh token locally and reconnects automatically.
+            </p>
+          ) : null}
+        </Card>
+
+        <Card title="Diagnostics">
+          <StatusPill
+            ok={dropbox.overall.ready}
+            label={dropbox.overall.label}
+          />
+          <p className="text-sm text-[var(--ink)]">{dropbox.overall.explanation}</p>
+          <ul className="space-y-2">
+            {dropbox.steps.map((s) => (
+              <li
+                key={s.id}
+                className="flex flex-col gap-1 border-b border-[var(--line)] py-2 sm:flex-row sm:items-start sm:justify-between"
+              >
+                <div>
+                  <p className="text-sm text-[var(--ink)]">{s.label}</p>
+                  <p className="text-xs text-[var(--muted)]">{s.message}</p>
+                </div>
+                <StatusPill ok={s.ok} label={s.ok ? "Pass" : "Fail"} />
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-[var(--muted)]">
+            Probes use a temporary{" "}
+            <code className="text-[var(--ink)]">.kimartarchive-diagnostics</code>{" "}
+            folder inside the App Folder. Artwork paths are not modified.
+          </p>
+        </Card>
+      </div>
+
+      {overall.ready ? (
+        <div className="mt-8 sm:mt-10">
+          <Link
+            href="/new-artwork"
+            className="inline-flex border border-[var(--ink)] bg-[var(--ink)] px-6 py-3 text-sm uppercase tracking-[0.14em] text-[var(--paper)] transition hover:bg-[var(--ink-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+          >
+            Continue to Artwork Intake →
+          </Link>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -70,20 +70,6 @@ export default async function SetupArchivePage({
       </p>
       <p className="mt-2 text-sm">
         <Link
-          href="/"
-          className="text-[var(--accent)] underline-offset-2 hover:underline"
-        >
-          Back home
-        </Link>
-        {" · "}
-        <Link
-          href="/new-artwork"
-          className="text-[var(--accent)] underline-offset-2 hover:underline"
-        >
-          New Artwork Batch
-        </Link>
-        {" · "}
-        <Link
           href="/setup/google"
           className="text-[var(--accent)] underline-offset-2 hover:underline"
         >
