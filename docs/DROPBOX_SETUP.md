@@ -123,16 +123,20 @@ Dropbox access tokens expire quickly.
 
 This app:
 
-1. Stores the **refresh token** on disk for this installation
+1. Loads a **refresh token** from local `.data/dropbox-credentials.json` (dev) or `DROPBOX_REFRESH_TOKEN` (Vercel)
 2. Keeps the access token **in memory only**
 3. On expiry / HTTP 401, silently calls `/oauth2/token` with `grant_type=refresh_token`
 4. Retries the Dropbox request once
 
-You should not need to log in again unless the refresh token is revoked or deleted locally.
+Locally you should not need to log in again unless the refresh token is revoked or deleted.
+
+On **Vercel**, OAuth Connect cannot persist to disk. Connect once on your machine, then copy values from `.data/dropbox-credentials.json` into the Vercel project environment (see below).
 
 ---
 
-## 7. Local credential storage
+## 7. Credential storage
+
+### Local development
 
 Path (under the project working directory):
 
@@ -149,6 +153,20 @@ Contains:
 - `connectedAt`
 
 This directory is gitignored. File mode is set to `0600` when the OS allows it.
+
+### Vercel / production
+
+Set these **server-only** env vars on the Vercel project (never `NEXT_PUBLIC_`):
+
+| Variable | Required | Notes |
+| --- | --- | --- |
+| `DROPBOX_REFRESH_TOKEN` | Yes | From local `.data/dropbox-credentials.json` |
+| `DROPBOX_ACCOUNT_ID` | Recommended | Shown in Archive Setup |
+| `DROPBOX_ACCOUNT_DISPLAY_NAME` | Optional | Defaults to `Dropbox (env)` |
+| `DROPBOX_ACCOUNT_EMAIL` | Optional | |
+| `DROPBOX_REDIRECT_URI` | Yes | Production callback, e.g. `https://YOUR_DOMAIN/api/auth/dropbox/callback` |
+
+Also add the production redirect URI in the Dropbox App Console (OAuth 2 settings).
 
 **Do not** store Dropbox tokens in:
 
@@ -192,7 +210,8 @@ Probes use `/.kimartarchive-diagnostics` inside the App Folder. Artwork paths ar
 
 **From this app**
 
-- Use **Disconnect** on Archive Setup — deletes `.data/dropbox-credentials.json` and clears the in-memory access token.
+- Local: **Disconnect** on Archive Setup deletes `.data/dropbox-credentials.json` and clears the in-memory access token.
+- Vercel: remove `DROPBOX_REFRESH_TOKEN` (and optional `DROPBOX_ACCOUNT_*`) from the project environment, then redeploy.
 
 **From Dropbox**
 

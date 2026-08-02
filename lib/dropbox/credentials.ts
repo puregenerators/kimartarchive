@@ -3,11 +3,21 @@ import "server-only";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import {
+  credentialsStorageDescription,
+  isVercelRuntime,
+  readDropboxCredentialsFromEnv,
+} from "@/lib/dropbox/credentials-logic";
 import { DropboxIntegrationError } from "@/lib/dropbox/errors";
 import type {
   DropboxAccountPublic,
   DropboxStoredCredentials,
 } from "@/lib/dropbox/types";
+
+export {
+  isVercelRuntime,
+  readDropboxCredentialsFromEnv,
+} from "@/lib/dropbox/credentials-logic";
 
 /**
  * Local credential file for this single-archive installation.
@@ -16,6 +26,9 @@ import type {
  *
  * Contains refresh token + account metadata. Never commit this file.
  * Never send contents to the browser. Never log the refresh token.
+ *
+ * On Vercel / serverless, prefer `DROPBOX_REFRESH_TOKEN` (and optional
+ * account env vars) because the local filesystem is ephemeral.
  */
 export const DROPBOX_CREDENTIALS_DIR_NAME = ".data";
 export const DROPBOX_CREDENTIALS_FILE_NAME = "dropbox-credentials.json";
@@ -43,7 +56,7 @@ function isStoredCredentials(value: unknown): value is DropboxStoredCredentials 
   );
 }
 
-export async function readDropboxCredentials(
+async function readDropboxCredentialsFromFile(
   cwd: string = process.cwd(),
 ): Promise<DropboxStoredCredentials | null> {
   const filePath = getDropboxCredentialsPath(cwd);
@@ -70,10 +83,31 @@ export async function readDropboxCredentials(
   }
 }
 
+/**
+ * Prefer local `.data` file (dev), then env (`DROPBOX_REFRESH_TOKEN` for Vercel).
+ */
+export async function readDropboxCredentials(
+  cwd: string = process.cwd(),
+  envSource: NodeJS.ProcessEnv = process.env,
+): Promise<DropboxStoredCredentials | null> {
+  const fromFile = await readDropboxCredentialsFromFile(cwd);
+  if (fromFile) return fromFile;
+  return readDropboxCredentialsFromEnv(envSource);
+}
+
 export async function writeDropboxCredentials(
   credentials: DropboxStoredCredentials,
   cwd: string = process.cwd(),
+  envSource: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
+  if (isVercelRuntime(envSource)) {
+    throw new DropboxIntegrationError({
+      code: "UNKNOWN",
+      message:
+        "Dropbox Connect cannot persist credentials on Vercel. Connect locally, then set DROPBOX_REFRESH_TOKEN (and optional DROPBOX_ACCOUNT_*) in the Vercel project environment.",
+    });
+  }
+
   const filePath = getDropboxCredentialsPath(cwd);
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true });
@@ -88,7 +122,16 @@ export async function writeDropboxCredentials(
 
 export async function clearDropboxCredentials(
   cwd: string = process.cwd(),
+  envSource: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
+  if (isVercelRuntime(envSource) && readDropboxCredentialsFromEnv(envSource)) {
+    throw new DropboxIntegrationError({
+      code: "UNKNOWN",
+      message:
+        "Dropbox is connected via DROPBOX_REFRESH_TOKEN on Vercel. Remove that env var in the Vercel dashboard to disconnect.",
+    });
+  }
+
   const filePath = getDropboxCredentialsPath(cwd);
   try {
     await fs.rm(filePath, { force: true });
@@ -99,8 +142,9 @@ export async function clearDropboxCredentials(
 
 export async function hasDropboxRefreshToken(
   cwd: string = process.cwd(),
+  envSource: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
-  const creds = await readDropboxCredentials(cwd);
+  const creds = await readDropboxCredentials(cwd, envSource);
   return Boolean(creds?.refreshToken);
 }
 
@@ -115,9 +159,5 @@ export function toPublicAccount(
 }
 
 export function getCredentialsStorageDescription(): string {
-  return (
-    "Dropbox refresh tokens are stored server-side in " +
-    `${DROPBOX_CREDENTIALS_DIR_NAME}/${DROPBOX_CREDENTIALS_FILE_NAME} ` +
-    "(gitignored). They are never sent to the browser."
-  );
+  return credentialsStorageDescription();
 }

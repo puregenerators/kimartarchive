@@ -3,6 +3,11 @@
  */
 
 import {
+  credentialsStorageDescription,
+  isVercelRuntime,
+  readDropboxCredentialsFromEnv,
+} from "./credentials-logic";
+import {
   MissingDropboxEnvError,
   getDropboxEnvPresence,
   listMissingDropboxEnvKeys,
@@ -590,6 +595,38 @@ const tests: TestCase[] = [
       assertEqual(result.failedOperation, "delete_file", "op");
       assertEqual(result.downloadVerified, true, "download ok");
       assertEqual(result.fileDeleted, false, "delete flag");
+    },
+  },
+  {
+    name: "readDropboxCredentialsFromEnv requires refresh token",
+    run: () => {
+      assertEqual(
+        readDropboxCredentialsFromEnv({}),
+        null,
+        "missing token is null",
+      );
+      const creds = readDropboxCredentialsFromEnv({
+        DROPBOX_REFRESH_TOKEN: " rt-abc ",
+        DROPBOX_ACCOUNT_ID: " dbid:xyz ",
+        DROPBOX_ACCOUNT_DISPLAY_NAME: " Kim ",
+        DROPBOX_ACCOUNT_EMAIL: " kim@example.com ",
+      });
+      assertEqual(creds?.refreshToken, "rt-abc", "token");
+      assertEqual(creds?.accountId, "dbid:xyz", "account");
+      assertEqual(creds?.displayName, "Kim", "name");
+      assertEqual(creds?.email, "kim@example.com", "email");
+    },
+  },
+  {
+    name: "isVercelRuntime and storage description",
+    run: () => {
+      assertEqual(isVercelRuntime({}), false, "unset");
+      assertEqual(isVercelRuntime({ VERCEL: "1" }), true, "vercel");
+      assertEqual(
+        credentialsStorageDescription().includes("DROPBOX_REFRESH_TOKEN"),
+        true,
+        "mentions env token",
+      );
     },
   },
 ];
