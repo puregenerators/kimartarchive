@@ -6,6 +6,7 @@ import { BatchImageUploader } from "@/components/artwork/BatchImageUploader";
 import { BatchReview } from "@/components/artwork/BatchReview";
 import { BatchSummaryBar } from "@/components/artwork/BatchSummaryBar";
 import { SharedDetailsSection } from "@/components/artwork/SharedDetailsSection";
+import { useTiffPreviews } from "@/components/artwork/useTiffPreviews";
 import {
   appendFilesToBatch,
   artworkNeedsMetadata,
@@ -57,6 +58,13 @@ export function NewArtworkBatchForm({
   const [processingByArtworkId, setProcessingByArtworkId] = useState<
     Record<string, ArtworkProcessingState>
   >({});
+  const {
+    previewByArtworkId,
+    enqueueMissing,
+    enqueueForArtwork,
+    invalidateArtwork,
+    resetAll: resetTiffPreviews,
+  } = useTiffPreviews();
   const artworksRef = useRef(batch.artworks);
   const artworksSectionRef = useRef<HTMLElement | null>(null);
 
@@ -106,6 +114,10 @@ export function NewArtworkBatchForm({
     setBatch(result.batch);
     setUploadRejects(result.rejected);
 
+    if (result.added.length > 0) {
+      enqueueMissing(result.added);
+    }
+
     if (result.duplicates.length > 0 && !allowDuplicates) {
       setDuplicatePrompt({
         duplicates: result.duplicates,
@@ -141,6 +153,7 @@ export function NewArtworkBatchForm({
     setProcessingByArtworkId((current) =>
       clearProcessingForArtwork(current, id),
     );
+    invalidateArtwork(id);
   }
 
   function moveArtwork(id: string, direction: -1 | 1) {
@@ -166,6 +179,7 @@ export function NewArtworkBatchForm({
     for (const artwork of batch.artworks) {
       revokeArtworkImage(artwork);
     }
+    resetTiffPreviews();
     setBatch(createEmptyBatch());
     setErrors({ artworks: {} });
     setProcessingByArtworkId({});
@@ -245,6 +259,7 @@ export function NewArtworkBatchForm({
         shared={batch.shared}
         artworks={batch.artworks}
         processingByArtworkId={processingByArtworkId}
+        tiffPreviewByArtworkId={previewByArtworkId}
         onProcessingChange={updateProcessing}
         onBack={() => setMode("edit")}
         onReset={resetBatch}
@@ -262,17 +277,19 @@ export function NewArtworkBatchForm({
     <div>
       <header className="max-w-2xl">
         <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
-          Kim Artwork Archive
+          Kim Osgood Archive
         </p>
         <h1 className="mt-3 font-display text-4xl tracking-tight text-[var(--ink)] sm:text-5xl">
           Add New Artwork
         </h1>
-        <p className="mt-4 text-[var(--muted)] leading-relaxed">
-          You can upload one image or a batch.<br/>
-          Each image file becomes its own artwork entry. <br/>
-          You can enter details that will apply to all artworks in the batch, like date and gallery.
-    
-        </p>
+        <ul className="mt-4 list-disc space-y-1 pl-5 text-[var(--muted)] leading-relaxed">
+          <li>You can upload one image or a batch.</li>
+          <li>Each image file becomes its own artwork entry.</li>
+          <li>
+            You can enter details that will apply to all artworks in the batch,
+            like date and gallery.
+          </li>
+        </ul>
         {count > 0 ? (
           <p className="mt-3 text-sm text-[var(--ink-soft)]">
             {count} artwork{count === 1 ? "" : "s"} in this batch
@@ -448,8 +465,8 @@ export function NewArtworkBatchForm({
                   })}
                 </ul>
                 <p className="mt-3 text-sm text-[var(--muted)]">
-                  Title, Height, Width, Depth, Edition, Notes, and images are
-                  never changed by this action.
+                  Title, Height, Width, Depth, Notes, and images are never
+                  changed by this action.
                 </p>
                 <div className="mt-5 flex flex-wrap gap-3">
                   <button
@@ -539,11 +556,13 @@ export function NewArtworkBatchForm({
                     onRemove={() => removeArtwork(artwork.id)}
                     onMoveUp={() => moveArtwork(artwork.id, -1)}
                     onMoveDown={() => moveArtwork(artwork.id, 1)}
-                    onImageReplaced={() =>
+                    onImageReplaced={(next) => {
                       setProcessingByArtworkId((current) =>
                         clearProcessingForArtwork(current, artwork.id),
-                      )
-                    }
+                      );
+                      enqueueForArtwork(next);
+                    }}
+                    tiffPreview={previewByArtworkId[artwork.id]}
                   />
                 ))}
               </div>

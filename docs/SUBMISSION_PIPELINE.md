@@ -2,8 +2,8 @@
 
 This app is a **temporary processing and delivery tool**. After a successful submission:
 
-- permanent files live in **Dropbox** (default storage backend; legacy Google Drive remains available via `ARTWORK_STORAGE_PROVIDER=drive`)
-- permanent metadata lives in **Google Sheets**
+- permanent files live in **Dropbox** (default storage backend; legacy Google Drive remains available via `ARTWORK_STORAGE_PROVIDER=drive`), including a portable `{inventoryId}_metadata.json` beside each artwork’s images
+- permanent inventory metadata also lives in **Google Sheets** (primary database)
 - temporary local image files and form state are **disposable**
 - the app is **not** an archive or database
 
@@ -25,6 +25,8 @@ Fields:
 | `file:{clientArtworkId}` | One source file per artwork, keyed by stable client ID |
 
 The server regenerates inventory IDs, filenames, folder names, Drive URLs, and derivatives. It does **not** trust preview inventory IDs or client-planned filenames.
+
+Artwork metadata in the submission payload and inventory row covers title, year, medium, dimensions, photographer, exhibition, gallery / venue, notes, and file/folder links. Medium is a single resolved string (Monotype, Painting, or a specific custom value such as Watercolor) — the intake UI may offer an Other choice, but the payload and Sheet row never store the literal word `Other` unless the user intentionally typed it as the custom value (which validation rejects). Series, Edition, Status, and Location are not collected or written during intake. Current physical location and ownership belong in a later Artwork Management workflow.
 
 ---
 
@@ -103,30 +105,34 @@ Google Sheets does **not** provide database-grade locking. Prefer reconciliation
 Order per artwork:
 
 1. Mark claim `Processing`
-2. Create Drive artwork folder (direct child of configured root)
+2. Create artwork folder (direct child of configured archive root)
 3. Upload master (original bytes preserved)
 4. Generate HR + web JPGs via existing Sharp module (unchanged settings)
 5. Upload HR JPG
 6. Upload web JPG
-7. Append one complete `Artwork Inventory` row
-8. Mark claim `Completed`
-9. Delete temporary local files
+7. Generate and upload portable `{inventoryId}_metadata.json`
+8. Append one complete `Artwork Inventory` row
+9. Mark claim `Completed`
+10. Delete temporary local files
 
-Do **not** append the inventory row until all three Drive files exist.
+Do **not** append the inventory row until all three image files and the metadata file exist.
 
-Drive layout (flat under root — no year subfolder, no Original/Derivatives subfolders):
+Artwork folder layout (flat under root — no year subfolder, no Original/Derivatives subfolders):
 
 ```text
 Kim Artwork Archive/
 └── 2026_KO_1000_BlueGarden/
     ├── 2026_KO_1000_BlueGarden_master_01.tif
     ├── 2026_KO_1000_BlueGarden_hr_01.jpg
-    └── 2026_KO_1000_BlueGarden_web_01.jpg
+    ├── 2026_KO_1000_BlueGarden_web_01.jpg
+    └── 1000_metadata.json
 ```
+
+`{inventoryId}_metadata.json` is a UTF-8 portable archival record (`schemaVersion: 1`) that travels with the folder. The Inventory ID in the filename keeps the file identifiable if it is copied or downloaded outside its folder. Google Sheets remains the primary inventory database; the JSON file enables future Sheet rebuilds, DAM/CMS migration, and restore if the spreadsheet is lost.
 
 Folder name: `YYYY_KO_INVENTORYID_SanitizedTitle`
 
-Files are never made public; inherited Drive permissions are preserved.
+Files are never made public; inherited storage permissions are preserved.
 
 Before creating a folder, the server checks for an exact-name direct child. If it exists: conflict → mark claim `Failed` → continue to next artwork → retain the inventory ID.
 
@@ -141,8 +147,9 @@ One artwork failure does **not** stop later artworks.
 | Failure before folder exists | Mark claim `Failed`; continue |
 | Failure after folder exists | Best-effort move folder to `Failed Intake`; mark claim `Failed`; retain resource IDs; continue |
 | Move to Failed Intake also fails | Leave folder in place; report primary failure **and** cleanup failure |
-| All three files uploaded, Sheet append fails | Move folder to Failed Intake; mark claim `Failed`; report files exist without inventory row |
-| Sheet append succeeds, claim Completed update fails | Return `reconciliation_required` (not a normal failure); Drive + Sheet row exist; claim needs manual correction; do not auto-retry |
+| Images uploaded, metadata file upload fails | Do not append inventory row; preserve claim ID, folder, and image files; mark claim `Failed`; report `upload_metadata` as the failed operation |
+| Images + metadata uploaded, Sheet append fails | Move folder to Failed Intake; mark claim `Failed`; report files exist without inventory row |
+| Sheet append succeeds, claim Completed update fails | Return `reconciliation_required` (not a normal failure); storage files + Sheet row exist; claim needs manual correction; do not auto-retry |
 | Marking claim Failed itself fails | Include reconciliation warning; preserve original failure |
 
 Do not automatically delete uploaded files.
@@ -220,7 +227,7 @@ Never log: private keys, tokens, credentials, image bytes, derivative buffers, r
 2. Initialize headers and `Failed Intake` via `/setup/google` against those test resources (or mirror setup manually).
 3. Confirm diagnostics show **TEST** target and Editor access.
 4. Submit a **1-artwork** batch with a small JPEG.
-5. Verify: one claim Completed, one inventory row, one Drive folder with three files, no public permissions changes.
+5. Verify: one claim Completed, one inventory row, one artwork folder with three image files plus `{inventoryId}_metadata.json`, no public permissions changes.
 6. Submit a deliberate failure case (e.g. conflict by pre-creating the folder name) and confirm Failed claim + Failed Intake move.
 7. Only then try a small multi-artwork batch.
 8. Do not point `ARTWORK_SUBMISSION_TARGET=production` until test results are reviewed.

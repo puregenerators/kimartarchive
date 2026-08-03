@@ -26,6 +26,34 @@ function json(data: unknown, status = 200) {
   return NextResponse.json(data, { status });
 }
 
+function parseArtworkEntry(value: unknown): ArtworkSubmissionInput | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const overridesRaw =
+    raw.overrides && typeof raw.overrides === "object"
+      ? (raw.overrides as Record<string, unknown>)
+      : {};
+
+  return {
+    clientArtworkId: String(raw.clientArtworkId ?? ""),
+    order: Number(raw.order ?? 0),
+    title: String(raw.title ?? ""),
+    year: String(raw.year ?? ""),
+    medium: String(raw.medium ?? "").trim(),
+    height: String(raw.height ?? ""),
+    width: String(raw.width ?? ""),
+    depth: String(raw.depth ?? ""),
+    dimensionUnit: String(raw.dimensionUnit ?? ""),
+    notes: String(raw.notes ?? ""),
+    overrides: {
+      exhibition: String(overridesRaw.exhibition ?? ""),
+      gallery: String(overridesRaw.gallery ?? ""),
+      photographer: String(overridesRaw.photographer ?? ""),
+    },
+    originalFilename: String(raw.originalFilename ?? ""),
+  };
+}
+
 function parseArtworksJson(
   raw: FormDataEntryValue | null,
 ): ArtworkSubmissionInput[] | null {
@@ -33,7 +61,13 @@ function parseArtworksJson(
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return null;
-    return parsed as ArtworkSubmissionInput[];
+    const artworks: ArtworkSubmissionInput[] = [];
+    for (const entry of parsed) {
+      const artwork = parseArtworkEntry(entry);
+      if (!artwork) return null;
+      artworks.push(artwork);
+    }
+    return artworks;
   } catch {
     return null;
   }
@@ -51,7 +85,6 @@ function parseSharedJson(
       gallery: String(parsed.gallery ?? ""),
       exhibitionYear: String(parsed.exhibitionYear ?? ""),
       photographer: String(parsed.photographer ?? ""),
-      defaultLocation: String(parsed.defaultLocation ?? ""),
     };
   } catch {
     return null;

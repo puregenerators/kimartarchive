@@ -22,6 +22,7 @@ export const ARTWORK_SUBMISSION_STAGES = [
   "derivatives_generated",
   "hr_uploaded",
   "web_uploaded",
+  "metadata_uploaded",
   "sheet_row_appended",
   "completed",
   "failed",
@@ -39,6 +40,7 @@ export const SUBMISSION_FAILED_OPERATIONS = [
   "generate_derivatives",
   "upload_hr",
   "upload_web",
+  "upload_metadata",
   "append_inventory_row",
   "mark_claim_completed",
 ] as const;
@@ -71,7 +73,8 @@ export type ReconciliationWarning = {
     | "FAILED_INTAKE_MOVE_FAILED"
     | "CLAIM_MARK_FAILED_FAILED"
     | "INVENTORY_ROW_WITHOUT_COMPLETED_CLAIM"
-    | "DRIVE_FILES_WITHOUT_INVENTORY_ROW";
+    | "DRIVE_FILES_WITHOUT_INVENTORY_ROW"
+    | "DRIVE_FILES_WITHOUT_METADATA";
   message: string;
 };
 
@@ -87,11 +90,6 @@ export type ArtworkSubmissionInput = {
   width: string;
   depth: string;
   dimensionUnit: string;
-  /** Optional; UI does not currently collect series — blank is fine. */
-  series: string;
-  edition: string;
-  status: string;
-  location: string;
   notes: string;
   overrides: {
     exhibition: string;
@@ -108,7 +106,6 @@ export type ArtworkBatchSubmissionInput = {
     gallery: string;
     exhibitionYear: string;
     photographer: string;
-    defaultLocation: string;
   };
   artworks: ArtworkSubmissionInput[];
 };
@@ -122,10 +119,6 @@ export type ResolvedArtworkMetadata = {
   width: string;
   depth: string;
   dimensionUnit: string;
-  series: string;
-  edition: string;
-  status: string;
-  location: string;
   notes: string;
   exhibition: string;
   gallery: string;
@@ -163,6 +156,7 @@ export type ArtworkSubmissionBase = {
   master: DriveResourceRef | null;
   hr: DriveResourceRef | null;
   web: DriveResourceRef | null;
+  metadata: DriveResourceRef | null;
   sheetRowWritten: boolean;
   claimStatus: ClaimStatus | null;
   cleanup: CleanupResult;
@@ -179,6 +173,7 @@ export type ArtworkSubmissionSuccess = ArtworkSubmissionBase & {
   master: DriveResourceRef;
   hr: DriveResourceRef;
   web: DriveResourceRef;
+  metadata: DriveResourceRef;
   sheetRowWritten: true;
   reconciliationWarnings: ReconciliationWarning[];
 };

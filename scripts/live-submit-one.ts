@@ -42,10 +42,6 @@ async function main() {
       width: "16",
       depth: "",
       dimensionUnit: "in",
-      series: "",
-      edition: "",
-      status: "Available",
-      location: "Studio",
       notes: "One-artwork Dropbox storage verification",
       overrides: { exhibition: "", gallery: "", photographer: "" },
       originalFilename: "dropbox-live-probe.jpg",
@@ -57,7 +53,6 @@ async function main() {
     gallery: "",
     exhibitionYear: "2026",
     photographer: "Live Probe",
-    defaultLocation: "Studio",
   };
 
   const body = new FormData();

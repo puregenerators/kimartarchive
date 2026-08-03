@@ -13,6 +13,7 @@ import {
   formatFileSize,
   isTiffFile,
 } from "@/lib/artwork/validation";
+import { suggestTitleFromFilename } from "@/lib/artwork/suggest-title";
 
 export type FileLike = {
   name: string;
@@ -21,23 +22,14 @@ export type FileLike = {
   type?: string;
 };
 
+export {
+  suggestTitleFromFilename,
+  type SuggestedTitle,
+} from "@/lib/artwork/suggest-title";
+
 /** Stable identity for duplicate detection (not content hashing). */
 export function fileIdentityKey(file: FileLike): string {
   return `${file.name}\0${file.size}\0${file.lastModified}`;
-}
-
-/**
- * Derive a suggested title from a source filename.
- * Light transform only: strip extension, replace _/- with spaces, trim.
- * Does not aggressively re-case unusual titles.
- */
-export function suggestTitleFromFilename(filename: string): string {
-  const base = filename.replace(/^.*[/\\]/, "");
-  const withoutExt = base.replace(/\.[^.]+$/u, "");
-  return withoutExt
-    .replace(/[_-]+/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim();
 }
 
 export function totalBatchBytes(artworks: readonly ArtworkDraft[]): number {
@@ -179,8 +171,9 @@ export function appendFilesToBatch(
     });
     const draft = createArtworkDraft(shared, {
       image,
-      title: suggested,
-      titleSuggestedFromFilename: suggested.length > 0,
+      title: suggested.title,
+      titleSuggestedFromFilename: suggested.title.length > 0,
+      titleArtistAliasRemoved: suggested.removedArtistAlias,
     });
 
     added.push(draft);
@@ -231,9 +224,12 @@ export function replaceArtworkImage(
     artwork: {
       ...artwork,
       image,
-      title: shouldRefreshSuggestedTitle ? suggested : artwork.title,
+      title: shouldRefreshSuggestedTitle ? suggested.title : artwork.title,
       titleSuggestedFromFilename: shouldRefreshSuggestedTitle
-        ? suggested.length > 0
+        ? suggested.title.length > 0
+        : false,
+      titleArtistAliasRemoved: shouldRefreshSuggestedTitle
+        ? suggested.removedArtistAlias
         : false,
     },
   };

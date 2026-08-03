@@ -1,18 +1,6 @@
 export const DIMENSION_UNITS = ["in", "cm"] as const;
 export type DimensionUnit = (typeof DIMENSION_UNITS)[number];
 
-export const STATUS_VALUES = [
-  "Available",
-  "Sold",
-  "Reserved",
-  "Consigned",
-  "On Loan",
-  "Not for Sale",
-  "Gifted",
-  "Archived",
-] as const;
-export type ArtworkStatus = (typeof STATUS_VALUES)[number];
-
 /** Local preview IDs begin here and increment by artwork order. */
 export const PREVIEW_INVENTORY_BASE = 1000;
 
@@ -33,9 +21,7 @@ export type BatchSharedDetails = {
   exhibitionYear: string;
   defaultArtworkYear: string;
   photographer: string;
-  defaultLocation: string;
   defaultMedium: string;
-  defaultStatus: ArtworkStatus | "";
   defaultDimensionUnit: DimensionUnit;
 };
 
@@ -56,15 +42,14 @@ export type ArtworkDraft = {
   title: string;
   /** True when title was auto-filled from the filename and not yet edited. */
   titleSuggestedFromFilename: boolean;
+  /** True when the filename suggestion stripped a configured artist alias. */
+  titleArtistAliasRemoved: boolean;
   year: string;
   medium: string;
   height: string;
   width: string;
   depth: string;
   dimensionUnit: DimensionUnit;
-  edition: string;
-  status: ArtworkStatus | "";
-  location: string;
   notes: string;
   overrides: ArtworkOverrideFields;
   /** Exactly one source file per artwork when present. */
@@ -85,7 +70,6 @@ export type ArtworkValidationErrors = Partial<
     | "width"
     | "depth"
     | "dimensionUnit"
-    | "status"
     | "image",
     string
   >
@@ -102,9 +86,7 @@ export const EMPTY_SHARED_DETAILS: BatchSharedDetails = {
   exhibitionYear: "",
   defaultArtworkYear: "",
   photographer: "",
-  defaultLocation: "",
   defaultMedium: "",
-  defaultStatus: "",
   defaultDimensionUnit: "in",
 };
 
@@ -118,9 +100,7 @@ export const EMPTY_OVERRIDES: ArtworkOverrideFields = {
 export type ApplyableSharedFieldKey =
   | "year"
   | "medium"
-  | "status"
   | "dimensionUnit"
-  | "location"
   | "exhibition"
   | "gallery"
   | "photographer";
@@ -133,9 +113,7 @@ export const APPLYABLE_SHARED_FIELDS: ReadonlyArray<{
 }> = [
   { key: "year", label: "Artwork Year", from: "Default Artwork Year" },
   { key: "medium", label: "Medium", from: "Default Medium" },
-  { key: "status", label: "Status", from: "Default Status" },
   { key: "dimensionUnit", label: "Dimension Unit", from: "Default Dimension Unit" },
-  { key: "location", label: "Location", from: "Default Location" },
   { key: "exhibition", label: "Exhibition override", from: "Exhibition" },
   { key: "gallery", label: "Gallery / Venue override", from: "Gallery / Venue" },
   { key: "photographer", label: "Photographer override", from: "Photographer" },
@@ -154,21 +132,20 @@ export function createArtworkDraft(
     image?: ArtworkImage | null;
     title?: string;
     titleSuggestedFromFilename?: boolean;
+    titleArtistAliasRemoved?: boolean;
   },
 ): ArtworkDraft {
   return {
     id: createArtworkId(),
     title: options?.title ?? "",
     titleSuggestedFromFilename: options?.titleSuggestedFromFilename ?? false,
+    titleArtistAliasRemoved: options?.titleArtistAliasRemoved ?? false,
     year: shared.defaultArtworkYear,
     medium: shared.defaultMedium,
     height: "",
     width: "",
     depth: "",
     dimensionUnit: shared.defaultDimensionUnit,
-    edition: "",
-    status: shared.defaultStatus,
-    location: shared.defaultLocation,
     notes: "",
     overrides: { ...EMPTY_OVERRIDES },
     image: options?.image ?? null,
@@ -200,7 +177,7 @@ export function effectiveOverride(
 
 /**
  * Apply selected shared defaults onto artworks.
- * Never overwrites Title, Height, Width, Depth, Edition, Notes, or image.
+ * Never overwrites Title, Height, Width, Depth, Notes, or image.
  * Exhibition / gallery / photographer write into override fields when selected.
  */
 export function applySharedDetailsToArtworks(
@@ -215,11 +192,9 @@ export function applySharedDetailsToArtworks(
 
     if (selected.has("year")) next.year = shared.defaultArtworkYear;
     if (selected.has("medium")) next.medium = shared.defaultMedium;
-    if (selected.has("status")) next.status = shared.defaultStatus;
     if (selected.has("dimensionUnit")) {
       next.dimensionUnit = shared.defaultDimensionUnit;
     }
-    if (selected.has("location")) next.location = shared.defaultLocation;
     if (selected.has("exhibition")) {
       next.overrides.exhibition = shared.exhibition;
     }

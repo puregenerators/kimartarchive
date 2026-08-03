@@ -53,6 +53,23 @@ export const IMAGE_PROCESSING_CONFIG = {
       m2: 0.4,
     },
   },
+
+  /**
+   * Temporary UI-only JPEG thumbnails (e.g. browser TIFF previews).
+   * Not archival. Never upload these to Dropbox or write them to Sheets.
+   * Kept separate from HR / web derivative settings above.
+   */
+  preview: {
+    maxWidth: 600,
+    maxHeight: 600,
+    quality: 78,
+    progressive: true,
+    neverEnlarge: true as const,
+    flattenBackground: { r: 255, g: 255, b: 255 },
+    colourspace: "srgb" as const,
+    /** Client-side queue limit for concurrent Sharp preview jobs. */
+    concurrency: 2,
+  },
 } as const;
 
 export type ImageProcessingConfig = typeof IMAGE_PROCESSING_CONFIG;

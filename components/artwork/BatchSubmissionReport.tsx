@@ -17,6 +17,7 @@ const STAGE_LABELS: Record<string, string> = {
   derivatives_generated: "Generating derivatives",
   hr_uploaded: "Uploading High Resolution",
   web_uploaded: "Uploading Web",
+  metadata_uploaded: "Writing metadata file",
   sheet_row_appended: "Writing Inventory",
   completed: "Complete",
   failed: "Failed",
@@ -30,6 +31,7 @@ const OPERATION_LABELS: Record<string, string> = {
   generate_derivatives: "Generating derivatives",
   upload_hr: "Uploading High Resolution",
   upload_web: "Uploading Web",
+  upload_metadata: "Uploading metadata file",
   append_inventory_row: "Writing Inventory",
   mark_claim_completed: "Complete",
 };
@@ -59,8 +61,9 @@ export function BatchSubmissionReport({
           Submission complete
         </h1>
         <p className="mt-4 text-[var(--muted)] leading-relaxed">
-          Permanent files are in Dropbox. Permanent metadata is in Google
-          Sheets. This app does not retain the archive after delivery.
+          Permanent files (including Inventory-ID metadata) are in Dropbox. The
+          inventory database is in Google Sheets. This app does not retain the
+          archive after delivery.
         </p>
       </header>
 

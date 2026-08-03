@@ -14,6 +14,16 @@ import {
   isBlankHeaderRow,
 } from "./headers";
 import {
+  ARTWORK_INVENTORY_HEADERS_WITH_LOCATION,
+  LEGACY_ARTWORK_INVENTORY_HEADERS,
+  LOCATION_COLUMN_INDEX,
+  findValuesInLocationColumn,
+  findValuesInRemovedInventoryColumns,
+  planArtworkInventoryHeaderMigration,
+  projectInventoryRowDroppingLocation,
+  projectLegacyInventoryRowToCurrent,
+} from "./inventory-header-migration";
+import {
   buildChildFolderQuery,
   escapeDriveQueryValue,
 } from "./drive-query";
@@ -275,6 +285,195 @@ const tests: TestCase[] = [
       );
       assertEqual(reordered.kind, "mismatch", "reorder mismatch");
       assertEqual(reordered.orderMismatch, true, "order flag");
+    },
+  },
+  {
+    name: "Artwork Inventory schema is 21 columns without Location",
+    run: () => {
+      assertEqual(ARTWORK_INVENTORY_HEADERS.length, 21, "column count");
+      assertDeepEqual(
+        [...ARTWORK_INVENTORY_HEADERS],
+        [
+          "Inventory ID",
+          "Title",
+          "Year",
+          "Medium",
+          "Height",
+          "Width",
+          "Depth",
+          "Dimension Unit",
+          "Photographer",
+          "Exhibition",
+          "Gallery / Venue",
+          "Notes",
+          "Master Filename",
+          "Master File URL",
+          "High Resolution Filename",
+          "High Resolution File URL",
+          "Web Filename",
+          "Web File URL",
+          "Artwork Folder URL",
+          "Created At",
+          "Updated At",
+        ],
+        "exact header order",
+      );
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS.includes("Location" as never),
+        false,
+        "no Location",
+      );
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS_WITH_LOCATION.length,
+        22,
+        "pre-migration count",
+      );
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS_WITH_LOCATION[LOCATION_COLUMN_INDEX],
+        "Location",
+        "Location at index 9",
+      );
+      assertEqual(LEGACY_ARTWORK_INVENTORY_HEADERS.length, 25, "legacy count");
+      assertEqual(LEGACY_ARTWORK_INVENTORY_HEADERS[8], "Series", "legacy Series");
+      assertEqual(LEGACY_ARTWORK_INVENTORY_HEADERS[9], "Edition", "legacy Edition");
+      assertEqual(LEGACY_ARTWORK_INVENTORY_HEADERS[10], "Status", "legacy Status");
+    },
+  },
+  {
+    name: "live header migration plans deletion of Location only",
+    run: () => {
+      const plan = planArtworkInventoryHeaderMigration({
+        headerRow: [...ARTWORK_INVENTORY_HEADERS_WITH_LOCATION],
+        dataRows: [],
+      });
+      assertEqual(plan.ok, true, "plan ok");
+      if (!plan.ok) return;
+      assertEqual(plan.alreadyMigrated, false, "needs migration");
+      assertDeepEqual(
+        plan.deleteColumnIndicesDescending,
+        [LOCATION_COLUMN_INDEX],
+        "delete Location at index 9",
+      );
+      assertDeepEqual(
+        [...plan.expectedAfter],
+        [...ARTWORK_INVENTORY_HEADERS],
+        "expected after",
+      );
+
+      const already = planArtworkInventoryHeaderMigration({
+        headerRow: [...ARTWORK_INVENTORY_HEADERS],
+      });
+      assertEqual(already.ok, true, "already ok");
+      if (!already.ok) return;
+      assertEqual(already.alreadyMigrated, true, "already migrated");
+      assertDeepEqual(already.deleteColumnIndicesDescending, [], "no deletes");
+    },
+  },
+  {
+    name: "migration refuses when Location contains values",
+    run: () => {
+      const plan = planArtworkInventoryHeaderMigration({
+        headerRow: [...ARTWORK_INVENTORY_HEADERS_WITH_LOCATION],
+        dataRows: [
+          [
+            "1000",
+            "Title",
+            "2026",
+            "Oil",
+            "24",
+            "18",
+            "",
+            "in",
+            "Pat",
+            "Studio",
+            "Show",
+          ],
+        ],
+      });
+      assertEqual(plan.ok, false, "refused");
+      if (plan.ok) return;
+      assertEqual(plan.reason, "removed_columns_have_values", "reason");
+      assertEqual(
+        plan.valuesInRemovedColumns?.[0]?.columnName,
+        "Location",
+        "col",
+      );
+      assertEqual(plan.valuesInRemovedColumns?.[0]?.value, "Studio", "value");
+    },
+  },
+  {
+    name: "dropping Location keeps Photographer, Exhibition, and file columns aligned",
+    run: () => {
+      const withLocation = [
+        "1000",
+        "Blue Garden",
+        "2026",
+        "Oil",
+        "24",
+        "18",
+        "2",
+        "in",
+        "Pat",
+        "Studio",
+        "Spring Show",
+        "Main Gallery",
+        "Note",
+        "m.tif",
+        "https://m",
+        "h.jpg",
+        "https://h",
+        "w.jpg",
+        "https://w",
+        "https://folder",
+        "created",
+        "updated",
+      ];
+      const projected = projectInventoryRowDroppingLocation(withLocation);
+      assertEqual(projected.length, 21, "projected length");
+      assertEqual(projected[7], "in", "Dimension Unit stays");
+      assertEqual(projected[8], "Pat", "Photographer not shifted wrong");
+      assertEqual(projected[9], "Spring Show", "Exhibition after Photographer");
+      assertEqual(projected[10], "Main Gallery", "Gallery / Venue");
+      assertEqual(projected[11], "Note", "Notes");
+      assertEqual(projected[12], "m.tif", "Master Filename");
+      assertEqual(projected[18], "https://folder", "Artwork Folder URL");
+      assertEqual(projected[19], "created", "Created At");
+      assertEqual(projected[20], "updated", "Updated At");
+
+      const values = findValuesInLocationColumn([withLocation]);
+      assertEqual(values.length, 1, "finds Studio");
+      assertEqual(values[0]!.value, "Studio", "Studio value");
+
+      const legacy = [
+        "1000",
+        "Blue Garden",
+        "2026",
+        "Oil",
+        "24",
+        "18",
+        "2",
+        "in",
+        "", // Series
+        "", // Edition
+        "", // Status
+        "Pat",
+        "Studio",
+        "Spring Show",
+        "Main Gallery",
+        "Note",
+        "m.tif",
+        "https://m",
+        "h.jpg",
+        "https://h",
+        "w.jpg",
+        "https://w",
+        "https://folder",
+        "created",
+        "updated",
+      ];
+      const fromLegacy = projectLegacyInventoryRowToCurrent(legacy);
+      assertDeepEqual(fromLegacy, projected, "legacy projects to same result");
+      assertEqual(findValuesInRemovedInventoryColumns([legacy]).length, 0, "blank");
     },
   },
   {

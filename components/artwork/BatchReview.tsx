@@ -3,6 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { BatchSubmissionReport } from "@/components/artwork/BatchSubmissionReport";
 import { FilenameDisplay } from "@/components/artwork/FilenameDisplay";
+import {
+  ArtworkImageThumb,
+  ArtworkImageThumbFooterNote,
+} from "@/components/artwork/ArtworkImageThumb";
 import { ProcessingResultPanel } from "@/components/artwork/ProcessingResultPanel";
 import { planFilenamesForArtwork } from "@/lib/artwork/filenames";
 import {
@@ -28,6 +32,11 @@ import {
   isProcessingResultStale,
 } from "@/lib/images/fingerprint";
 import {
+  buildSourceFileFingerprint,
+  resolveTiffPreviewUrl,
+  type TiffPreviewState,
+} from "@/lib/images/preview-client";
+import {
   batchDraftToSubmissionPayload,
 } from "@/lib/submission/validate-input";
 import type { BatchSubmissionResult } from "@/lib/submission/types";
@@ -38,6 +47,7 @@ type BatchReviewProps = {
   shared: BatchSharedDetails;
   artworks: ArtworkDraft[];
   processingByArtworkId: Record<string, ArtworkProcessingState>;
+  tiffPreviewByArtworkId?: Record<string, TiffPreviewState>;
   onProcessingChange: (
     artworkId: string,
     state: ArtworkProcessingState,
@@ -108,6 +118,7 @@ function ReviewArtworkCard({
   index,
   shared,
   processing,
+  tiffPreview,
   onProcessingChange,
   autoTestToken,
   onAutoTestConsumed,
@@ -117,6 +128,7 @@ function ReviewArtworkCard({
   index: number;
   shared: BatchSharedDetails;
   processing: ArtworkProcessingState;
+  tiffPreview?: TiffPreviewState;
   onProcessingChange: (state: ArtworkProcessingState) => void;
   autoTestToken?: number | null;
   onAutoTestConsumed?: () => void;
@@ -240,6 +252,20 @@ function ReviewArtworkCard({
 
   const isBusy = processing.status === "processing";
 
+  const sourcePreviewUrl = (() => {
+    if (!artwork.image) return null;
+    if (artwork.image.previewUrl) return artwork.image.previewUrl;
+    if (!artwork.image.isTiff) return null;
+    return resolveTiffPreviewUrl(
+      tiffPreview,
+      buildSourceFileFingerprint({
+        imageName: artwork.image.file.name,
+        imageSize: artwork.image.file.size,
+        imageLastModified: artwork.image.file.lastModified,
+      }),
+    );
+  })();
+
   return (
     <article
       id={`review-artwork-${artwork.id}`}
@@ -248,29 +274,23 @@ function ReviewArtworkCard({
       <div className="grid gap-5 lg:grid-cols-[10rem_minmax(0,1fr)]">
         <div>
           <div className="h-36 w-full overflow-hidden bg-[var(--surface-muted)] sm:h-40">
-            {artwork.image?.previewUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={artwork.image.previewUrl}
-                alt={`Preview of ${artwork.image.file.name}`}
-                className="h-full w-full object-cover"
-              />
-            ) : (
-              <div className="flex h-full flex-col items-center justify-center gap-1 px-2 text-center">
-                <span className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
-                  TIFF
-                </span>
-                <span className="text-[10px] text-[var(--muted)]">
-                  Preview unavailable
-                </span>
-              </div>
-            )}
+            <ArtworkImageThumb
+              image={artwork.image}
+              tiffPreview={tiffPreview}
+              className="h-full w-full object-cover"
+            />
           </div>
           {artwork.image ? (
-            <p className="mt-2 text-xs text-[var(--muted)]">
-              {describeImageType(artwork.image.file)} ·{" "}
-              {formatFileSize(artwork.image.file.size)}
-            </p>
+            <div className="mt-2 space-y-0.5">
+              <p className="text-xs text-[var(--muted)]">
+                {describeImageType(artwork.image.file)} ·{" "}
+                {formatFileSize(artwork.image.file.size)}
+              </p>
+              <ArtworkImageThumbFooterNote
+                image={artwork.image}
+                tiffPreview={tiffPreview}
+              />
+            </div>
           ) : null}
         </div>
 
@@ -286,9 +306,6 @@ function ReviewArtworkCard({
             <MetaRow label="Year" value={artwork.year} />
             <MetaRow label="Medium" value={artwork.medium} />
             <MetaRow label="Dimensions" value={formatDimensions(artwork)} />
-            <MetaRow label="Edition" value={artwork.edition} />
-            <MetaRow label="Status" value={artwork.status} />
-            <MetaRow label="Location" value={artwork.location} />
             <MetaRow label="Exhibition" value={exhibition} />
             <MetaRow label="Gallery / Venue" value={gallery} />
             <MetaRow label="Photographer" value={photographer} />
@@ -355,7 +372,7 @@ function ReviewArtworkCard({
           {successResult ? (
             <ProcessingResultPanel
               result={successResult}
-              sourcePreviewUrl={artwork.image?.previewUrl ?? null}
+              sourcePreviewUrl={sourcePreviewUrl}
               isTiff={Boolean(artwork.image?.isTiff)}
               stale={stale}
             />
@@ -370,6 +387,7 @@ export function BatchReview({
   shared,
   artworks,
   processingByArtworkId,
+  tiffPreviewByArtworkId = {},
   onProcessingChange,
   onBack,
   onReset,
@@ -701,7 +719,6 @@ export function BatchReview({
           <MetaRow label="Gallery / Venue" value={shared.gallery} />
           <MetaRow label="Exhibition year" value={shared.exhibitionYear} />
           <MetaRow label="Photographer" value={shared.photographer} />
-          <MetaRow label="Default location" value={shared.defaultLocation} />
         </dl>
       </section>
 
@@ -725,6 +742,7 @@ export function BatchReview({
             processing={
               processingByArtworkId[artwork.id] ?? { status: "idle" }
             }
+            tiffPreview={tiffPreviewByArtworkId[artwork.id]}
             onProcessingChange={(state) =>
               onProcessingChange(artwork.id, state)
             }

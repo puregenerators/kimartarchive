@@ -1,9 +1,12 @@
 import {
+  normalizeMedium,
+  validateMediumValue,
+} from "@/lib/artwork/medium";
+import {
   DIMENSION_UNITS,
   MAX_ARTWORKS_PER_BATCH,
   MAX_BATCH_BYTES,
   MAX_FILE_BYTES,
-  STATUS_VALUES,
   type ArtworkDraft,
   type BatchDraft,
   type BatchSharedDetails,
@@ -50,8 +53,9 @@ function validateArtworkInput(
   if (!/^\d{4}$/.test(artwork.year.trim())) {
     return `Artwork “${artwork.title}”: Year must be four digits.`;
   }
-  if (!artwork.medium.trim()) {
-    return `Artwork “${artwork.title}”: Medium is required.`;
+  const mediumError = validateMediumValue(artwork.medium);
+  if (mediumError) {
+    return `Artwork “${artwork.title}”: ${mediumError.replace(/\.$/, "")}.`;
   }
   if (!isPositiveNumber(artwork.height)) {
     return `Artwork “${artwork.title}”: Height must be a positive number.`;
@@ -68,12 +72,6 @@ function validateArtworkInput(
     )
   ) {
     return `Artwork “${artwork.title}”: Dimension unit is invalid.`;
-  }
-  if (
-    artwork.status.trim() &&
-    !STATUS_VALUES.includes(artwork.status as (typeof STATUS_VALUES)[number])
-  ) {
-    return `Artwork “${artwork.title}”: Status is invalid.`;
   }
   if (!file) {
     return `Artwork “${artwork.title}”: Exactly one source image is required.`;
@@ -171,7 +169,12 @@ export function validateSubmissionBatch(params: {
     input: {
       submissionAttemptId: attemptId,
       shared: params.shared,
-      artworks: [...params.artworks].sort((a, b) => a.order - b.order),
+      artworks: [...params.artworks]
+        .map((artwork) => ({
+          ...artwork,
+          medium: normalizeMedium(artwork.medium),
+        }))
+        .sort((a, b) => a.order - b.order),
     },
     filesByArtworkId,
     totalBytes,
@@ -187,15 +190,11 @@ export function draftsToSubmissionArtworks(
     order,
     title: artwork.title,
     year: artwork.year,
-    medium: artwork.medium,
+    medium: normalizeMedium(artwork.medium),
     height: artwork.height,
     width: artwork.width,
     depth: artwork.depth,
     dimensionUnit: artwork.dimensionUnit,
-    series: "",
-    edition: artwork.edition,
-    status: artwork.status,
-    location: artwork.location,
     notes: artwork.notes,
     overrides: { ...artwork.overrides },
     originalFilename: artwork.image?.file.name ?? "",
@@ -210,7 +209,6 @@ export function sharedToSubmissionShared(
     gallery: shared.gallery,
     exhibitionYear: shared.exhibitionYear,
     photographer: shared.photographer,
-    defaultLocation: shared.defaultLocation,
   };
 }
 

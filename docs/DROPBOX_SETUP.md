@@ -1,4 +1,4 @@
-# Dropbox Setup — Kim Artwork Archive
+# Dropbox Setup — Kim Osgood Archive
 
 How to connect this local archive app to Dropbox with OAuth (offline refresh token).
 

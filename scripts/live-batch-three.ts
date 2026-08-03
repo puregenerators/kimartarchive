@@ -51,7 +51,6 @@ async function main() {
     gallery: "Test Studio",
     exhibitionYear: "2026",
     photographer: "Batch Tester",
-    defaultLocation: "Studio",
   };
 
   const artworks = [];
@@ -86,10 +85,6 @@ async function main() {
       width: "12",
       depth: "",
       dimensionUnit: "in",
-      series: "",
-      edition: "",
-      status: "Available",
-      location: "Studio",
       notes: `Controlled batch fixture: ${spec.title}`,
       overrides: { exhibition: "", gallery: "", photographer: "" },
       originalFilename: spec.filename,

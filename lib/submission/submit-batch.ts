@@ -153,6 +153,7 @@ export async function submitArtworkBatch(
           master: null,
           hr: null,
           web: null,
+          metadata: null,
           sheetRowWritten: false,
           claimStatus: null,
           cleanup: {

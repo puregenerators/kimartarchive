@@ -1,5 +1,6 @@
 import {
   buildArtworkFilename,
+  buildArtworkMetadataFilename,
   normalizeMasterExtension,
   planFilenamesForArtwork,
   planFilenamesForMasters,
@@ -129,6 +130,21 @@ const tests: TestCase[] = [
     },
   },
   {
+    name: "metadata filename is Inventory-ID based",
+    run: () => {
+      assertEqual(
+        buildArtworkMetadataFilename(1000),
+        "1000_metadata.json",
+        "1000",
+      );
+      assertEqual(
+        buildArtworkMetadataFilename(2048),
+        "2048_metadata.json",
+        "2048",
+      );
+    },
+  },
+  {
     name: "one artwork always uses sequence 01",
     run: () => {
       const plan = planFilenamesForArtwork({
@@ -145,6 +161,7 @@ const tests: TestCase[] = [
           master: "2026_KO_1001_BlueGarden_master_01.jpg",
           hr: "2026_KO_1001_BlueGarden_hr_01.jpg",
           web: "2026_KO_1001_BlueGarden_web_01.jpg",
+          metadata: "1001_metadata.json",
         },
         "single artwork plan",
       );
@@ -168,6 +185,11 @@ const tests: TestCase[] = [
           `2026_KO_${inventoryId}_${title}_master_01.tif`,
           `${title} master`,
         );
+        assertEqual(
+          plan.metadata,
+          `${inventoryId}_metadata.json`,
+          `${title} metadata`,
+        );
       });
     },
   },
@@ -189,18 +211,21 @@ const tests: TestCase[] = [
             master: "2026_KO_1000_BlueGarden_master_01.tif",
             hr: "2026_KO_1000_BlueGarden_hr_01.jpg",
             web: "2026_KO_1000_BlueGarden_web_01.jpg",
+            metadata: "1000_metadata.json",
           },
           {
             sequence: "02",
             master: "2026_KO_1000_BlueGarden_master_02.jpg",
             hr: "2026_KO_1000_BlueGarden_hr_02.jpg",
             web: "2026_KO_1000_BlueGarden_web_02.jpg",
+            metadata: "1000_metadata.json",
           },
           {
             sequence: "03",
             master: "2026_KO_1000_BlueGarden_master_03.png",
             hr: "2026_KO_1000_BlueGarden_hr_03.jpg",
             web: "2026_KO_1000_BlueGarden_web_03.jpg",
+            metadata: "1000_metadata.json",
           },
         ],
         "multi-file plan",

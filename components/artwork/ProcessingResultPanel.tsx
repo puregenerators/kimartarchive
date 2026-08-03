@@ -111,7 +111,9 @@ export function ProcessingResultPanel({
           label="Source"
           src={sourcePreviewUrl}
           placeholder={
-            isTiff ? "TIFF preview unavailable in browser" : "No preview"
+            isTiff
+              ? "TIFF preview unavailable — original can still be processed"
+              : "No preview"
           }
         />
         <PreviewFrame label="HR JPG" src={hr.previewUrl} />

@@ -115,6 +115,14 @@ Create these tabs in the spreadsheet if they do not exist:
 
 The app **will not** silently create missing tabs. It can initialize **blank** header rows after you confirm on the diagnostic page.
 
+Expected `Artwork Inventory` header order (21 columns):
+
+```text
+Inventory ID	Title	Year	Medium	Height	Width	Depth	Dimension Unit	Photographer	Exhibition	Gallery / Venue	Notes	Master Filename	Master File URL	High Resolution Filename	High Resolution File URL	Web Filename	Web File URL	Artwork Folder URL	Created At	Updated At
+```
+
+Series, Edition, Status, and Location are not part of this schema. Physical location and ownership are managed after intake, not during new-artwork processing.
+
 ---
 
 ## 7. Run the diagnostic page

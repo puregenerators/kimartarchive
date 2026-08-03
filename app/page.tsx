@@ -4,14 +4,13 @@ export default function Home() {
   return (
     <main className="relative mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-5 py-20 sm:px-8">
       <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
-        Kim Artwork Archive
+        Kim Osgood Archive
       </p>
       <h1 className="mt-4 font-display text-5xl tracking-tight text-[var(--ink)] sm:text-6xl">
         Artwork Intake Tool
       </h1>
       <p className="mt-5 max-w-xl text-[var(--muted)] leading-relaxed">
-        Prepare a batch of artworks for the archive. This milestone is local
-        only—nothing is uploaded or saved yet.
+        Prepare a batch of artworks to add to the archive.
       </p>
       <div className="mt-10">
         <Link

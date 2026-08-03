@@ -1,9 +1,9 @@
+import { validateMediumValue } from "@/lib/artwork/medium";
 import {
   DIMENSION_UNITS,
   MAX_ARTWORKS_PER_BATCH,
   MAX_BATCH_BYTES,
   MAX_FILE_BYTES,
-  STATUS_VALUES,
   formatArtworkNumber,
   type ArtworkDraft,
   type ArtworkValidationErrors,
@@ -112,8 +112,9 @@ export function validateArtworkDraft(
     errors.year = "Year must be a four-digit number.";
   }
 
-  if (!artwork.medium.trim()) {
-    errors.medium = "Medium is required.";
+  const mediumError = validateMediumValue(artwork.medium);
+  if (mediumError) {
+    errors.medium = mediumError;
   }
 
   if (!isPositiveNumber(artwork.height)) {
@@ -130,10 +131,6 @@ export function validateArtworkDraft(
 
   if (!DIMENSION_UNITS.includes(artwork.dimensionUnit)) {
     errors.dimensionUnit = "Dimension unit must be in or cm.";
-  }
-
-  if (artwork.status && !STATUS_VALUES.includes(artwork.status)) {
-    errors.status = "Select a valid status, or leave blank.";
   }
 
   if (!artwork.image) {
@@ -157,7 +154,6 @@ function firstArtworkErrorMessage(
   if (errors.width) return errors.width.replace(/\.$/, "");
   if (errors.depth) return errors.depth.replace(/\.$/, "");
   if (errors.dimensionUnit) return errors.dimensionUnit.replace(/\.$/, "");
-  if (errors.status) return errors.status.replace(/\.$/, "");
   if (errors.image) {
     if (errors.image.toLowerCase().includes("unsupported")) {
       return "Unsupported image type";

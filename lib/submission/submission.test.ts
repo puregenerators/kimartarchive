@@ -25,6 +25,13 @@ import {
   resolveArtworkMetadata,
 } from "@/lib/submission/claim-logic";
 import { buildArtworkInventoryRow } from "@/lib/submission/inventory-row";
+import { validateSubmissionBatch } from "@/lib/submission/validate-input";
+import {
+  ARTWORK_METADATA_SCHEMA_VERSION,
+  buildArtworkMetadataFilename,
+  buildPortableArtworkMetadata,
+  serializePortableArtworkMetadata,
+} from "@/lib/submission/artwork-metadata";
 import {
   maybeThrowTestFault,
   resolveTestFaultConfig,
@@ -69,15 +76,11 @@ const sampleArtwork = (
   order: 0,
   title: "Blue Garden",
   year: "2026",
-  medium: "Oil",
+  medium: "Monotype",
   height: "24",
   width: "18",
   depth: "",
   dimensionUnit: "in",
-  series: "",
-  edition: "",
-  status: "Available",
-  location: "Studio",
   notes: "",
   overrides: { exhibition: "", gallery: "", photographer: "" },
   originalFilename: "blue-garden.tif",
@@ -171,6 +174,34 @@ const tests: TestCase[] = [
       assertEqual(resolved.gallery, "Shared Gallery", "shared fallback");
       assertEqual(resolved.photographer, "Alex", "override photographer");
       assertEqual(resolved.title, "Blue Garden", "title");
+      assertEqual(
+        "series" in resolved,
+        false,
+        "series removed from resolved metadata",
+      );
+      assertEqual(
+        "edition" in resolved,
+        false,
+        "edition removed from resolved metadata",
+      );
+      assertEqual(
+        "status" in resolved,
+        false,
+        "status removed from resolved metadata",
+      );
+    },
+  },
+  {
+    name: "submission payload excludes Series, Edition, and Status",
+    run: () => {
+      const artwork = sampleArtwork();
+      assertEqual("series" in artwork, false, "no series on input");
+      assertEqual("edition" in artwork, false, "no edition on input");
+      assertEqual("status" in artwork, false, "no status on input");
+      const json = JSON.stringify(artwork);
+      assertTrue(!json.includes('"series"'), "payload JSON has no series");
+      assertTrue(!json.includes('"edition"'), "payload JSON has no edition");
+      assertTrue(!json.includes('"status"'), "payload JSON has no status");
     },
   },
   {
@@ -229,13 +260,109 @@ const tests: TestCase[] = [
         createdAt: "2026-07-30T12:00:00.000Z",
       });
       assertEqual(row.length, ARTWORK_INVENTORY_HEADERS.length, "column count");
+      assertEqual(ARTWORK_INVENTORY_HEADERS.length, 21, "schema has 21 columns");
       assertEqual(row[0], "1000", "Inventory ID");
       assertEqual(row[1], "Blue Garden", "Title");
-      assertEqual(row[3], "Oil", "Medium");
-      assertEqual(row[16], "m.tif", "Master Filename position");
-      assertEqual(row[17], "https://drive/m", "Master File URL (Drive legacy)");
-      assertEqual(row[22], "https://drive/f", "Artwork Folder URL position");
-      assertEqual(row[23], "2026-07-30T12:00:00.000Z", "Created At");
+      assertEqual(row[3], "Monotype", "Medium");
+      assertEqual(row[8], "Pat", "Photographer after Dimension Unit");
+      assertEqual(row[9], "Show", "Exhibition after Photographer (no Location)");
+      assertEqual(row[12], "m.tif", "Master Filename position");
+      assertEqual(row[13], "https://drive/m", "Master File URL (Drive legacy)");
+      assertEqual(row[18], "https://drive/f", "Artwork Folder URL position");
+      assertEqual(row[19], "2026-07-30T12:00:00.000Z", "Created At");
+    },
+  },
+  {
+    name: "server rejects literal Other as medium and accepts resolved custom",
+    run: () => {
+      const file = new File([new Uint8Array([1, 2, 3])], "a.jpg", {
+        type: "image/jpeg",
+      });
+      const rejected = validateSubmissionBatch({
+        submissionAttemptId: "attempt-medium-1",
+        shared: {
+          exhibition: "",
+          gallery: "",
+          exhibitionYear: "",
+          photographer: "",
+        },
+        artworks: [sampleArtwork({ medium: "Other" })],
+        files: [{ clientArtworkId: "art-1", file }],
+      });
+      assertEqual(rejected.ok, false, "Other rejected");
+      if (!rejected.ok) {
+        assertTrue(
+          rejected.message.includes("Enter the specific medium"),
+          "clear message",
+        );
+      }
+
+      const accepted = validateSubmissionBatch({
+        submissionAttemptId: "attempt-medium-2",
+        shared: {
+          exhibition: "",
+          gallery: "",
+          exhibitionYear: "",
+          photographer: "",
+        },
+        artworks: [sampleArtwork({ medium: " Watercolor " })],
+        files: [{ clientArtworkId: "art-1", file }],
+      });
+      assertEqual(accepted.ok, true, "custom accepted");
+      if (accepted.ok) {
+        assertEqual(
+          accepted.input.artworks[0]!.medium,
+          "Watercolor",
+          "normalized resolved string only",
+        );
+      }
+
+      const whitespace = validateSubmissionBatch({
+        submissionAttemptId: "attempt-medium-3",
+        shared: {
+          exhibition: "",
+          gallery: "",
+          exhibitionYear: "",
+          photographer: "",
+        },
+        artworks: [sampleArtwork({ medium: "   " })],
+        files: [{ clientArtworkId: "art-1", file }],
+      });
+      assertEqual(whitespace.ok, false, "whitespace rejected");
+    },
+  },
+  {
+    name: "resolved custom medium writes a single Sheet Medium column",
+    run: () => {
+      const metadata = resolveArtworkMetadata(
+        sampleArtwork({ medium: "Mixed media" }),
+        {
+          exhibition: "Show",
+          gallery: "Venue",
+          photographer: "Pat",
+        },
+      );
+      const row = buildArtworkInventoryRow({
+        inventoryId: 1000,
+        metadata,
+        links: {
+          masterFilename: "m.tif",
+          masterFileUrl: "https://drive/m",
+          hrFilename: "h.jpg",
+          hrFileUrl: "https://drive/h",
+          webFilename: "w.jpg",
+          webFileUrl: "https://drive/w",
+          artworkFolderUrl: "https://drive/f",
+        },
+        createdAt: "2026-07-30T12:00:00.000Z",
+      });
+      assertEqual(row[3], "Mixed media", "Medium value");
+      assertEqual(row.length, ARTWORK_INVENTORY_HEADERS.length, "unchanged width");
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS.filter((h) => /medium/i.test(h)).length,
+        1,
+        "exactly one Medium column",
+      );
     },
   },
   {
@@ -260,16 +387,16 @@ const tests: TestCase[] = [
         },
         createdAt: "2026-07-30T12:00:00.000Z",
       });
-      assertEqual(row[17], "https://www.dropbox.com/s/master?dl=0", "Master File URL");
-      assertEqual(row[19], "https://www.dropbox.com/s/hr?dl=0", "HR File URL");
-      assertEqual(row[21], "https://www.dropbox.com/s/web?dl=0", "Web File URL");
+      assertEqual(row[13], "https://www.dropbox.com/s/master?dl=0", "Master File URL");
+      assertEqual(row[15], "https://www.dropbox.com/s/hr?dl=0", "HR File URL");
+      assertEqual(row[17], "https://www.dropbox.com/s/web?dl=0", "Web File URL");
       assertEqual(
-        row[22],
+        row[18],
         "https://www.dropbox.com/scl/fo/folder?dl=0",
         "Artwork Folder URL",
       );
-      assertEqual(ARTWORK_INVENTORY_HEADERS[17], "Master File URL", "header name");
-      assertEqual(ARTWORK_INVENTORY_HEADERS[22], "Artwork Folder URL", "folder header");
+      assertEqual(ARTWORK_INVENTORY_HEADERS[13], "Master File URL", "header name");
+      assertEqual(ARTWORK_INVENTORY_HEADERS[18], "Artwork Folder URL", "folder header");
     },
   },
   {
@@ -278,10 +405,7 @@ const tests: TestCase[] = [
       const metadata = resolveArtworkMetadata(
         sampleArtwork({
           depth: "",
-          series: "",
-          edition: "",
           notes: "",
-          status: "",
         }),
         { exhibition: "", gallery: "", photographer: "" },
       );
@@ -300,32 +424,339 @@ const tests: TestCase[] = [
         createdAt: "2026-07-30T12:00:00.000Z",
       });
       assertEqual(row[6], "", "Depth blank");
-      assertEqual(row[8], "", "Series blank");
-      assertEqual(row[9], "", "Edition blank");
-      assertEqual(row[10], "", "Status blank");
-      assertEqual(row[13], "", "Exhibition blank");
-      assertEqual(row[15], "", "Notes blank");
+      assertEqual(row[8], "", "Photographer blank");
+      assertEqual(row[9], "", "Exhibition blank");
+      assertEqual(row[11], "", "Notes blank");
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS.includes("Location" as never),
+        false,
+        "Location not in headers",
+      );
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS.includes("Series" as never),
+        false,
+        "Series not in headers",
+      );
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS.includes("Edition" as never),
+        false,
+        "Edition not in headers",
+      );
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS.includes("Status" as never),
+        false,
+        "Status not in artwork inventory headers",
+      );
     },
   },
   {
-    name: "no inventory row is created before all three uploads succeed (stage gate)",
+    name: "no inventory row is created before images and metadata succeed (stage gate)",
     run: () => {
       // Documented invariant: buildArtworkInventoryRow is only called after
-      // master/hr/web refs exist in process-one. This test encodes the gate.
+      // master/hr/web/metadata refs exist in process-one.
       const uploadsComplete = {
         master: true,
         hr: true,
-        web: false,
+        web: true,
+        metadata: false,
       };
       const mayAppend =
-        uploadsComplete.master && uploadsComplete.hr && uploadsComplete.web;
-      assertEqual(mayAppend, false, "blocked until web uploaded");
-      uploadsComplete.web = true;
+        uploadsComplete.master &&
+        uploadsComplete.hr &&
+        uploadsComplete.web &&
+        uploadsComplete.metadata;
+      assertEqual(mayAppend, false, "blocked until metadata uploaded");
+      uploadsComplete.metadata = true;
       assertEqual(
-        uploadsComplete.master && uploadsComplete.hr && uploadsComplete.web,
+        uploadsComplete.master &&
+          uploadsComplete.hr &&
+          uploadsComplete.web &&
+          uploadsComplete.metadata,
         true,
-        "allowed after three uploads",
+        "allowed after images + metadata",
       );
+    },
+  },
+  {
+    name: "metadata file uses Inventory ID filename with schemaVersion, grouped dimensions, and file refs",
+    run: () => {
+      const resolved = resolveArtworkMetadata(
+        sampleArtwork({
+          depth: "2",
+          notes: "Frame pending",
+        }),
+        {
+          exhibition: "Spring Show",
+          gallery: "Main Gallery",
+          photographer: "Pat",
+        },
+      );
+      const metadataFilename = buildArtworkMetadataFilename(1000);
+      const portable = buildPortableArtworkMetadata({
+        inventoryId: 1000,
+        metadata: resolved,
+        master: {
+          id: "m1",
+          name: "2026_KO_1000_BlueGarden_master_01.tif",
+          webViewLink: "https://www.dropbox.com/s/master?dl=0",
+        },
+        hr: {
+          id: "h1",
+          name: "2026_KO_1000_BlueGarden_hr_01.jpg",
+          webViewLink: "https://www.dropbox.com/s/hr?dl=0",
+        },
+        web: {
+          id: "w1",
+          name: "2026_KO_1000_BlueGarden_web_01.jpg",
+          webViewLink: "https://www.dropbox.com/s/web?dl=0",
+        },
+        folder: {
+          id: "f1",
+          name: "2026_KO_1000_BlueGarden",
+          webViewLink: "https://www.dropbox.com/scl/fo/folder?dl=0",
+        },
+        metadataFilename,
+        createdAt: "2026-07-30T12:00:00.000Z",
+      });
+
+      assertEqual(
+        portable.schemaVersion,
+        ARTWORK_METADATA_SCHEMA_VERSION,
+        "schemaVersion",
+      );
+      assertEqual(portable.inventoryId, 1000, "inventoryId");
+      assertEqual(portable.title, "Blue Garden", "title");
+      assertEqual(portable.year, 2026, "year number");
+      assertDeepEqual(
+        portable.dimensions,
+        { height: 24, width: 18, depth: 2, unit: "in" },
+        "dimensions grouped",
+      );
+      assertEqual(
+        "series" in portable,
+        false,
+        "series removed from portable metadata",
+      );
+      assertEqual(
+        "edition" in portable,
+        false,
+        "edition removed from portable metadata",
+      );
+      assertEqual(
+        "status" in portable,
+        false,
+        "status removed from portable metadata",
+      );
+      assertEqual(
+        "location" in portable,
+        false,
+        "location removed from portable metadata",
+      );
+      assertEqual(portable.photographer, "Pat", "photographer");
+      assertEqual(portable.exhibition, "Spring Show", "exhibition");
+      assertEqual(portable.galleryVenue, "Main Gallery", "galleryVenue");
+      assertEqual(portable.notes, "Frame pending", "notes");
+      assertEqual(
+        portable.files.master.filename,
+        "2026_KO_1000_BlueGarden_master_01.tif",
+        "master filename",
+      );
+      assertEqual(
+        portable.files.master.url,
+        "https://www.dropbox.com/s/master?dl=0",
+        "master url",
+      );
+      assertEqual(
+        portable.files.highResolution.filename,
+        "2026_KO_1000_BlueGarden_hr_01.jpg",
+        "hr filename",
+      );
+      assertEqual(
+        portable.files.web.url,
+        "https://www.dropbox.com/s/web?dl=0",
+        "web url",
+      );
+      assertEqual(
+        portable.files.metadata.filename,
+        "1000_metadata.json",
+        "metadata filename in files",
+      );
+      assertEqual(
+        portable.files.folderUrl,
+        "https://www.dropbox.com/scl/fo/folder?dl=0",
+        "folder url",
+      );
+      assertEqual(portable.createdAt, "2026-07-30T12:00:00.000Z", "createdAt");
+      assertEqual(portable.updatedAt, "2026-07-30T12:00:00.000Z", "updatedAt");
+
+      const json = serializePortableArtworkMetadata(portable);
+      const parsed = JSON.parse(json) as typeof portable;
+      assertEqual(parsed.schemaVersion, 1, "parsed schemaVersion");
+      assertEqual(json.includes("\n"), true, "pretty-printed JSON");
+      assertEqual(metadataFilename, "1000_metadata.json", "filename");
+      assertEqual(
+        planFilenamesForArtwork({
+          year: 2026,
+          inventoryId: 1000,
+          title: "Blue Garden",
+          masterFilename: "blue.tif",
+        }).metadata,
+        "1000_metadata.json",
+        "planned metadata filename",
+      );
+    },
+  },
+  {
+    name: "metadata file optional blank values become null (not empty strings)",
+    run: () => {
+      const resolved = resolveArtworkMetadata(
+        sampleArtwork({
+          depth: "",
+          notes: "",
+        }),
+        { exhibition: "", gallery: "", photographer: "" },
+      );
+      const portable = buildPortableArtworkMetadata({
+        inventoryId: 1001,
+        metadata: resolved,
+        master: { id: "m", name: "a.tif", webViewLink: "u1" },
+        hr: { id: "h", name: "b.jpg", webViewLink: "u2" },
+        web: { id: "w", name: "c.jpg", webViewLink: "u3" },
+        folder: { id: "f", name: "folder", webViewLink: "u4" },
+        metadataFilename: buildArtworkMetadataFilename(1001),
+        createdAt: "2026-07-30T12:00:00.000Z",
+      });
+      assertEqual(portable.dimensions.depth, null, "depth null");
+      assertEqual(portable.photographer, null, "photographer null");
+      assertEqual(portable.exhibition, null, "exhibition null");
+      assertEqual(portable.galleryVenue, null, "galleryVenue null");
+      assertEqual(portable.notes, null, "notes null");
+      assertEqual(
+        portable.files.metadata.filename,
+        "1001_metadata.json",
+        "metadata filename",
+      );
+      const json = serializePortableArtworkMetadata(portable);
+      assertTrue(!json.includes('"series"'), "no series key");
+      assertTrue(!json.includes('"edition"'), "no edition key");
+      assertTrue(!json.includes('"status"'), "no status key");
+      assertTrue(!json.includes('"location"'), "no location key");
+      assertTrue(!json.includes('""'), "no empty-string values");
+    },
+  },
+  {
+    name: "upload_metadata failure prevents inventory row append",
+    run: () => {
+      const failure = {
+        ok: false as const,
+        lastCompletedStage: "web_uploaded" as const,
+        failedOperation: "upload_metadata" as const,
+        sheetRowWritten: false,
+        message:
+          "The master, high-resolution, and web images uploaded successfully, but 1105_metadata.json could not be created or uploaded.",
+        preserved: {
+          inventoryId: 1105,
+          folder: true,
+          master: true,
+          hr: true,
+          web: true,
+          metadata: false,
+        },
+      };
+      assertEqual(failure.sheetRowWritten, false, "no sheet row");
+      assertEqual(failure.failedOperation, "upload_metadata", "failed op");
+      assertEqual(failure.lastCompletedStage, "web_uploaded", "last stage");
+      assertEqual(failure.preserved.inventoryId, 1105, "ID preserved");
+      assertEqual(failure.preserved.folder, true, "folder preserved");
+      assertEqual(failure.preserved.master, true, "master preserved");
+      assertTrue(failure.message.includes("1105_metadata.json"), "clear error");
+    },
+  },
+  {
+    name: "Dropbox and Drive providers upload Inventory-ID metadata file via StorageProvider API",
+    run: async () => {
+      const metadataFilename = buildArtworkMetadataFilename(1000);
+      const portable = buildPortableArtworkMetadata({
+        inventoryId: 1000,
+        metadata: resolveArtworkMetadata(sampleArtwork(), {
+          exhibition: "",
+          gallery: "",
+          photographer: "",
+        }),
+        master: { id: "m", name: "m.tif", webViewLink: "https://m" },
+        hr: { id: "h", name: "h.jpg", webViewLink: "https://h" },
+        web: { id: "w", name: "w.jpg", webViewLink: "https://w" },
+        folder: { id: "f", name: "folder", webViewLink: "https://f" },
+        metadataFilename,
+        createdAt: "2026-07-30T12:00:00.000Z",
+      });
+      const contents = Buffer.from(
+        serializePortableArtworkMetadata(portable),
+        "utf8",
+      );
+
+      async function uploadViaProvider(kind: "dropbox" | "drive") {
+        const uploaded: Array<{
+          name: string;
+          mimeType: string;
+          contents: Buffer;
+        }> = [];
+        const storage: StorageProvider = {
+          kind,
+          async verifyReady() {
+            return { ok: true, rootName: "root", archiveRootUrl: null };
+          },
+          async findChildFolderByName() {
+            return null;
+          },
+          async createArtworkFolder(name) {
+            return { id: `/${name}`, name, webViewLink: `https://${kind}/f` };
+          },
+          async uploadFile(params) {
+            uploaded.push({
+              name: params.name,
+              mimeType: params.mimeType,
+              contents: Buffer.from(params.contents),
+            });
+            return {
+              id: `/${params.name}`,
+              name: params.name,
+              webViewLink: `https://${kind}/${params.name}`,
+            };
+          },
+          async moveFolderToFailedIntake() {},
+          getArchiveRootUrl() {
+            return null;
+          },
+        };
+
+        const result = await storage.uploadFile({
+          parentId: "/folder",
+          name: metadataFilename,
+          mimeType: "application/json",
+          contents,
+        });
+        return { uploaded, result };
+      }
+
+      for (const kind of ["dropbox", "drive"] as const) {
+        const { uploaded, result } = await uploadViaProvider(kind);
+        assertEqual(uploaded.length, 1, `${kind} one upload`);
+        assertEqual(uploaded[0]!.name, "1000_metadata.json", `${kind} filename`);
+        assertEqual(
+          uploaded[0]!.mimeType,
+          "application/json",
+          `${kind} mime`,
+        );
+        const parsed = JSON.parse(uploaded[0]!.contents.toString("utf8"));
+        assertEqual(parsed.schemaVersion, 1, `${kind} valid JSON schemaVersion`);
+        assertEqual(
+          parsed.files.metadata.filename,
+          "1000_metadata.json",
+          `${kind} self filename in JSON`,
+        );
+        assertEqual(result.name, "1000_metadata.json", `${kind} result name`);
+      }
     },
   },
   {

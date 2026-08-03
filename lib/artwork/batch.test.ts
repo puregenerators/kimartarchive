@@ -17,13 +17,24 @@ import {
   MAX_ARTWORKS_PER_BATCH,
   MAX_BATCH_BYTES,
   MAX_FILE_BYTES,
+  APPLYABLE_SHARED_FIELDS,
   applySharedDetailsToArtworks,
   createEmptyBatch,
   createArtworkDraft,
   type ArtworkDraft,
   type BatchSharedDetails,
 } from "./types";
-import { hasBatchErrors, validateBatch } from "./validation";
+import { hasBatchErrors, validateBatch, validateArtworkDraft } from "./validation";
+import {
+  deriveMediumChoice,
+  deriveCustomMedium,
+  resolveMediumValue,
+  validateMediumValue,
+} from "./medium";
+import { batchDraftToSubmissionPayload } from "@/lib/submission/validate-input";
+import { buildArtworkInventoryRow } from "@/lib/submission/inventory-row";
+import { resolveArtworkMetadata } from "@/lib/submission/claim-logic";
+import { ARTWORK_INVENTORY_HEADERS } from "@/lib/google/headers";
 
 type TestCase = {
   name: string;
@@ -69,9 +80,7 @@ function sharedDefaults(
     exhibitionYear: "2026",
     defaultArtworkYear: "2026",
     photographer: "Kim",
-    defaultLocation: "Studio",
-    defaultMedium: "Oil on linen",
-    defaultStatus: "Available",
+    defaultMedium: "Monotype",
     defaultDimensionUnit: "in",
     ...overrides,
   };
@@ -79,17 +88,27 @@ function sharedDefaults(
 
 const tests: TestCase[] = [
   {
-    name: "suggestTitleFromFilename replaces separators lightly",
+    name: "suggestTitleFromFilename replaces separators and title-cases",
     run: () => {
       assertEqual(
-        suggestTitleFromFilename("Tulip-Tree.tif"),
+        suggestTitleFromFilename("Tulip-Tree.tif").title,
         "Tulip Tree",
         "hyphen",
       );
       assertEqual(
-        suggestTitleFromFilename("Blue_Garden.jpg"),
+        suggestTitleFromFilename("Blue_Garden.jpg").title,
         "Blue Garden",
         "underscore",
+      );
+      assertEqual(
+        suggestTitleFromFilename("KO_Blue_Garden.tif").title,
+        "Blue Garden",
+        "strips KO prefix",
+      );
+      assertEqual(
+        suggestTitleFromFilename("KO_Blue_Garden.tif").removedArtistAlias,
+        true,
+        "alias removed flag",
       );
     },
   },
@@ -131,10 +150,38 @@ const tests: TestCase[] = [
       );
       const draft = result.added[0]!;
       assertEqual(draft.year, "2026", "year");
-      assertEqual(draft.medium, "Oil on linen", "medium");
-      assertEqual(draft.status, "Available", "status");
-      assertEqual(draft.location, "Studio", "location");
+      assertEqual(draft.medium, "Monotype", "medium");
       assertEqual(draft.dimensionUnit, "in", "unit");
+      assertEqual(
+        "location" in draft,
+        false,
+        "location removed from draft",
+      );
+      assertEqual(
+        "status" in draft,
+        false,
+        "status removed from draft",
+      );
+      assertEqual(
+        "edition" in draft,
+        false,
+        "edition removed from draft",
+      );
+      assertEqual(
+        "series" in draft,
+        false,
+        "series removed from draft",
+      );
+      assertEqual(
+        "defaultLocation" in shared,
+        false,
+        "defaultLocation removed from shared",
+      );
+      assertEqual(
+        "defaultStatus" in shared,
+        false,
+        "defaultStatus removed from shared",
+      );
       assertEqual(draft.title, "Tulip Tree", "suggested title");
       assertEqual(draft.titleSuggestedFromFilename, true, "suggested flag");
     },
@@ -371,7 +418,7 @@ const tests: TestCase[] = [
     run: () => {
       const shared = sharedDefaults({
         defaultArtworkYear: "2025",
-        defaultMedium: "Acrylic",
+        defaultMedium: "Watercolor",
         exhibition: "New Show",
         gallery: "West Wing",
         photographer: "Alex",
@@ -388,10 +435,9 @@ const tests: TestCase[] = [
       artwork.height = "40";
       artwork.width = "30";
       artwork.depth = "2";
-      artwork.edition = "1/5";
       artwork.notes = "Private note";
       artwork.year = "2020";
-      artwork.medium = "Oil";
+      artwork.medium = "Painting";
 
       const applied = applySharedDetailsToArtworks(
         [artwork],
@@ -403,11 +449,10 @@ const tests: TestCase[] = [
       assertEqual(applied.height, "40", "height protected");
       assertEqual(applied.width, "30", "width protected");
       assertEqual(applied.depth, "2", "depth protected");
-      assertEqual(applied.edition, "1/5", "edition protected");
       assertEqual(applied.notes, "Private note", "notes protected");
       assertEqual(applied.image?.file.name, "Keep.jpg", "image protected");
       assertEqual(applied.year, "2025", "year applied");
-      assertEqual(applied.medium, "Acrylic", "medium applied");
+      assertEqual(applied.medium, "Watercolor", "resolved custom medium applied");
       assertEqual(applied.overrides.exhibition, "New Show", "exhibition override");
       assertEqual(applied.overrides.gallery, "West Wing", "gallery override");
       assertEqual(
@@ -425,11 +470,204 @@ const tests: TestCase[] = [
       artwork.medium = "Ink";
       const applied = applySharedDetailsToArtworks(
         [artwork],
-        sharedDefaults({ defaultArtworkYear: "2026", defaultMedium: "Oil" }),
+        sharedDefaults({ defaultArtworkYear: "2026", defaultMedium: "Painting" }),
         ["year"],
       )[0]!;
       assertEqual(applied.year, "2026", "year applied");
       assertEqual(applied.medium, "Ink", "medium untouched");
+    },
+  },
+  {
+    name: "shared custom medium is inherited by newly created drafts",
+    run: () => {
+      const shared = sharedDefaults({
+        defaultMedium: resolveMediumValue("Other", "Watercolor"),
+      });
+      assertEqual(shared.defaultMedium, "Watercolor", "shared stores resolved");
+      const result = appendFilesToBatch(
+        { shared, artworks: [] },
+        [makeFile("New.jpg")],
+        { createPreviewUrls: false },
+      );
+      assertEqual(result.added[0]!.medium, "Watercolor", "inherited resolved");
+    },
+  },
+  {
+    name: "individual custom medium remains intact unless Medium is applied",
+    run: () => {
+      const artwork = createArtworkDraft(sharedDefaults());
+      artwork.medium = "Collage";
+      const applied = applySharedDetailsToArtworks(
+        [artwork],
+        sharedDefaults({ defaultMedium: "Monotype" }),
+        ["year", "dimensionUnit"],
+      )[0]!;
+      assertEqual(applied.medium, "Collage", "custom medium preserved");
+    },
+  },
+  {
+    name: "existing custom medium loads as Other + custom text for UI",
+    run: () => {
+      assertEqual(deriveMediumChoice("Mixed media"), "Other", "choice");
+      assertEqual(deriveCustomMedium("Mixed media"), "Mixed media", "custom");
+      assertEqual(deriveMediumChoice("Monotype"), "Monotype", "primary");
+      assertEqual(deriveMediumChoice("Painting"), "Painting", "painting");
+    },
+  },
+  {
+    name: "review uses resolved medium not Other",
+    run: () => {
+      const artwork = createArtworkDraft(
+        sharedDefaults({ defaultMedium: "Watercolor" }),
+      );
+      assertEqual(artwork.medium, "Watercolor", "draft medium");
+      assertEqual(artwork.medium === "Other", false, "not literal Other");
+      assertEqual(validateMediumValue(artwork.medium), null, "valid for review");
+    },
+  },
+  {
+    name: "submission payload and Sheet row contain only the resolved medium",
+    run: () => {
+      const artwork = createArtworkDraft(
+        sharedDefaults({ defaultMedium: "Monotype" }),
+        {
+          image: {
+            file: makeFile("Payload.jpg"),
+            previewUrl: null,
+            isTiff: false,
+          },
+        },
+      );
+      artwork.title = "Resolved Medium Piece";
+      artwork.height = "10";
+      artwork.width = "8";
+      artwork.medium = resolveMediumValue("Other", "Sculpture");
+
+      const payload = batchDraftToSubmissionPayload({
+        shared: sharedDefaults(),
+        artworks: [artwork],
+      });
+      assertEqual(payload.artworks[0]!.medium, "Sculpture", "payload medium");
+      assertEqual(
+        Object.prototype.hasOwnProperty.call(payload.artworks[0]!, "mediumChoice"),
+        false,
+        "no mediumChoice in payload",
+      );
+      assertEqual(
+        Object.prototype.hasOwnProperty.call(payload.artworks[0]!, "customMedium"),
+        false,
+        "no customMedium in payload",
+      );
+
+      const metadata = resolveArtworkMetadata(payload.artworks[0]!, {
+        exhibition: "Show",
+        gallery: "Venue",
+        photographer: "Kim",
+      });
+      const row = buildArtworkInventoryRow({
+        inventoryId: 1000,
+        metadata,
+        links: {
+          masterFilename: "m.jpg",
+          masterFileUrl: "https://drive/m",
+          hrFilename: "h.jpg",
+          hrFileUrl: "https://drive/h",
+          webFilename: "w.jpg",
+          webFileUrl: "https://drive/w",
+          artworkFolderUrl: "https://drive/f",
+        },
+        createdAt: "2026-08-03T12:00:00.000Z",
+      });
+      assertEqual(row.length, ARTWORK_INVENTORY_HEADERS.length, "schema width");
+      assertEqual(row[3], "Sculpture", "Sheet Medium column");
+      assertEqual(ARTWORK_INVENTORY_HEADERS[3], "Medium", "single Medium header");
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS.includes("Custom Medium"),
+        false,
+        "no Custom Medium column",
+      );
+    },
+  },
+  {
+    name: "validation rejects empty Other and literal Other",
+    run: () => {
+      const emptyOther = createArtworkDraft(sharedDefaults(), {
+        image: {
+          file: makeFile("X.jpg"),
+          previewUrl: null,
+          isTiff: false,
+        },
+      });
+      emptyOther.title = "T";
+      emptyOther.height = "1";
+      emptyOther.width = "1";
+      emptyOther.medium = resolveMediumValue("Other", "");
+      assertEqual(
+        validateArtworkDraft(emptyOther).medium,
+        "Medium is required.",
+        "empty Other",
+      );
+
+      emptyOther.medium = "Other";
+      assertEqual(
+        validateArtworkDraft(emptyOther).medium,
+        "Enter the specific medium.",
+        "literal Other",
+      );
+
+      emptyOther.medium = "   ";
+      assertEqual(
+        validateArtworkDraft(emptyOther).medium,
+        "Enter the specific medium.",
+        "whitespace",
+      );
+    },
+  },
+  {
+    name: "Apply Shared Details has no Location option",
+    run: () => {
+      assertEqual(
+        APPLYABLE_SHARED_FIELDS.some((f) => f.key === "location"),
+        false,
+        "no location apply key",
+      );
+      assertEqual(
+        APPLYABLE_SHARED_FIELDS.some((f) => f.label === "Location"),
+        false,
+        "no location label",
+      );
+    },
+  },
+  {
+    name: "submission payload excludes Location",
+    run: () => {
+      const shared = sharedDefaults();
+      const artwork = createArtworkDraft(shared, {
+        image: {
+          file: makeFile("Payload.jpg"),
+          previewUrl: null,
+          isTiff: false,
+        },
+      });
+      artwork.title = "Payload Piece";
+      artwork.height = "10";
+      artwork.width = "8";
+      const payload = batchDraftToSubmissionPayload({
+        shared,
+        artworks: [artwork],
+      });
+      assertEqual(
+        "defaultLocation" in payload.shared,
+        false,
+        "shared has no defaultLocation",
+      );
+      assertEqual(
+        "location" in payload.artworks[0]!,
+        false,
+        "artwork has no location",
+      );
+      assertEqual(payload.artworks[0]!.title, "Payload Piece", "title present");
+      assertEqual(payload.shared.photographer, "Kim", "photographer present");
     },
   },
   {

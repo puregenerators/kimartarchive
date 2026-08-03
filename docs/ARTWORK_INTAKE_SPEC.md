@@ -55,7 +55,7 @@ Users commonly upload **about 10–12 artwork images together**.
 - Do **not** treat multiple uploaded files as multiple views of one artwork.
 - Shared details are entered once and inherited by newly created artworks.
 - Artwork-specific fields (title, medium, dimensions, etc.) remain independently editable.
-- Each artwork becomes its **own** final record: own inventory claim, filenames, Drive folder, three files (master / HR / web), and Sheet row.
+- Each artwork becomes its **own** final record: own inventory claim, filenames, archive folder, three image files (master / HR / web), portable `{inventoryId}_metadata.json`, and Sheet row.
 - Shared batch metadata (exhibition, gallery, photographer, etc.) is copied onto each final artwork record, with optional per-artwork overrides for exhibition / gallery / photographer.
 
 A one-image selection remains a valid one-artwork batch.
@@ -70,8 +70,8 @@ For **each** artwork in the batch:
 4. Generate standardized filenames (sequence `01`).
 5. Preserve the original master file (no recompression).
 6. Create high-resolution JPG and web JPG derivatives.
-7. Upload all files to Google Drive in a fixed folder layout.
-8. Append **one** artwork row to the primary sheet tab (including Drive links).
+7. Upload all image files plus portable `{inventoryId}_metadata.json` via the storage provider.
+8. Append **one** artwork row to the primary sheet tab (including file links).
 
 Then show a success summary for the batch (inventory IDs and generated files).
 
@@ -111,9 +111,7 @@ Entered once per batch. Exhibition and Gallery / Venue are optional.
 | Exhibition Year | Optional documentation context |
 | Default Artwork Year | Copied onto new artwork cards |
 | Photographer | Shared default; overridable per artwork |
-| Default Location | Copied onto new artwork cards |
-| Default Medium | Free text |
-| Default Status | Fixed list; may be blank |
+| Default Medium | Controlled: blank, Monotype, Painting, or Other (with Specify default medium). Stored as the resolved value only — never the literal `Other`. Inherited by new artwork drafts. |
 | Default Dimension Unit | `in` or `cm`; **default `in`** |
 
 ### 3.2 Per-artwork fields
@@ -122,14 +120,11 @@ Entered once per batch. Exhibition and Gallery / Venue are optional.
 | --- | --- | --- |
 | Title | Yes | |
 | Artwork Year | Yes | Four-digit; used in filenames and Drive year folder |
-| Medium | Yes | |
+| Medium | Yes | Controlled: Monotype, Painting, or Other. Common values are Monotype and Painting. Other reveals a required **Specify medium** field (e.g. Watercolor, Drawing, Mixed media). The final stored value is the resolved string — never the literal dropdown value `Other`. Existing custom values load as Other + the stored text. |
 | Height / Width | Yes | Positive numbers |
 | Dimension Unit | Yes | `in` or `cm` |
 | Master image | Yes | Exactly one; TIFF, JPEG, or PNG |
 | Depth | No | Positive when provided |
-| Edition | No | |
-| Status | No | Fixed list; may be blank |
-| Location | No | |
 | Notes | No | |
 
 ### 3.3 Per-artwork overrides
@@ -144,21 +139,23 @@ Empty override → use shared value on the final record.
 
 ### 3.4 Shared default behavior
 
-- Newly created artwork drafts from uploaded files **inherit** current shared defaults as normal field values.
+- Newly created artwork drafts from uploaded files **inherit** current shared defaults as normal field values, including the **resolved** default medium (e.g. shared Other + “Watercolor” → artwork `medium` = `Watercolor`).
 - Later edits to shared defaults do **not** silently overwrite artwork values already on cards.
-- Explicit action: **Apply shared details to all artworks** lets the user choose which fields to update (Year, Medium, Status, Dimension Unit, Location, and optionally Exhibition / Gallery / Photographer overrides).
-- That action **never** overwrites Title, Height, Width, Depth, Edition, Notes, or image.
+- Explicit action: **Apply shared details to all artworks** lets the user choose which fields to update (Year, Medium, Dimension Unit, and optionally Exhibition / Gallery / Photographer overrides). When Medium is selected, the resolved shared medium value is applied — artwork-specific medium is left alone unless Medium is explicitly chosen.
+- That action **never** overwrites Title, Height, Width, Depth, Notes, or image.
+- Batch review and confirmation display the resolved medium only (never the dropdown label `Other`).
 
-### 3.5 Status values (optional)
+### 3.5 Captured archive metadata
 
-- Available
-- Sold
-- Reserved
-- Consigned
-- On Loan
-- Not for Sale
-- Gifted
-- Archived
+The current archive captures:
+
+- title, year, medium, dimensions
+- photographer, exhibition, gallery / venue, notes
+- master / high-resolution / web filenames and URLs, artwork folder URL
+
+Series, Edition, Status, and Location are **not** part of the active intake model or Sheet schema.
+
+Physical location and ownership (for example when a work enters a museum or notable collection) are intentionally managed after intake in a separate Artwork Management workflow, not during new-artwork processing.
 
 ---
 
@@ -185,25 +182,27 @@ Column order is fixed. Shared batch metadata is copied onto each row.
 | 6 | Width |
 | 7 | Depth |
 | 8 | Dimension Unit |
-| 9 | Series |
-| 10 | Edition |
-| 11 | Status |
-| 12 | Photographer |
-| 13 | Location |
-| 14 | Exhibition |
-| 15 | Gallery / Venue |
-| 16 | Notes |
-| 17 | Master Filename |
-| 18 | Master File URL |
-| 19 | High Resolution Filename |
-| 20 | High Resolution File URL |
-| 21 | Web Filename |
-| 22 | Web File URL |
-| 23 | Artwork Folder URL |
-| 24 | Created At |
-| 25 | Updated At |
+| 9 | Photographer |
+| 10 | Exhibition |
+| 11 | Gallery / Venue |
+| 12 | Notes |
+| 13 | Master Filename |
+| 14 | Master File URL |
+| 15 | High Resolution Filename |
+| 16 | High Resolution File URL |
+| 17 | Web Filename |
+| 18 | Web File URL |
+| 19 | Artwork Folder URL |
+| 20 | Created At |
+| 21 | Updated At |
 
-**Series** remains a sheet column for compatibility; the batch UI does not currently collect it (leave blank unless added later).
+**Medium column:** stores only the resolved medium string (Monotype, Painting, Watercolor, Mixed media, etc.). There is no second column for custom medium. The intake UI may present Monotype / Painting / Other, but Google Sheets never receives a separate “custom medium” field — Other is resolved before submission.
+
+Copyable header row:
+
+```text
+Inventory ID	Title	Year	Medium	Height	Width	Depth	Dimension Unit	Photographer	Exhibition	Gallery / Venue	Notes	Master Filename	Master File URL	High Resolution Filename	High Resolution File URL	Web Filename	Web File URL	Artwork Folder URL	Created At	Updated At
+```
 
 ### 4.2 Filename / URL cells
 
@@ -279,12 +278,14 @@ Kim Artwork Archive/          ← archive root folder ID
     2026_KO_1000_BlueGarden_master_01.<ext>
     2026_KO_1000_BlueGarden_hr_01.jpg
     2026_KO_1000_BlueGarden_web_01.jpg
+    1000_metadata.json        ← portable archival metadata (schemaVersion 1)
   Failed Intake/              ← destination for incomplete intakes
 ```
 
-- **One Drive artwork folder per artwork**, named `YYYY_KO_INVENTORYID_SanitizedTitle`.
-- Artwork folders are **flat**: master, HR JPG, and web JPG live directly in the artwork folder (no year parent folder; no `Master/` / `High Resolution/` / `Web/` subfolders).
+- **One artwork folder per artwork**, named `YYYY_KO_INVENTORYID_SanitizedTitle`.
+- Artwork folders are **flat**: master, HR JPG, web JPG, and `{inventoryId}_metadata.json` live directly in the artwork folder (no year parent folder; no `Master/` / `High Resolution/` / `Web/` subfolders).
 - Sheet column **Artwork Folder URL** points at that artwork folder.
+- Google Sheets remains the primary inventory database; `{inventoryId}_metadata.json` is a portable backup that travels with the folder and stays identifiable if copied outside it.
 
 ---
 
@@ -297,12 +298,15 @@ Kim Artwork Archive/          ← archive root folder ID
 | Master | Preserve original bytes; no recompression or re-encode; normalize `.jpeg`→`.jpg`, `.tiff`→`.tif` |
 | High Resolution JPG | Quality **95**; preserve original pixel dimensions (after orientation); apply EXIF orientation; convert to **sRGB** where supported; flatten transparency on white; progressive JPEG; strip unnecessary metadata but embed sRGB; **never enlarge**; no sharpening |
 | Web JPG | Max **2400px** on longest edge; preserve aspect ratio; **never enlarge**; quality **86**; Lanczos3 resize; mild sharpening only when resized; otherwise same color/flatten/progressive rules as HR |
+| UI TIFF thumbnail | Temporary JPEG only for intake display (max **600×600**, quality ~78, page 1 only). **Not archival.** Never uploaded to Dropbox or written to Sheets. |
 
 **Provisional:** HR quality 95 and web quality 86 / 2400px long edge are starting points pending visual testing with Kim’s actual artwork files. See `docs/IMAGE_PROCESSING.md` and `lib/images/config.ts`.
 
 **Initial master formats:** TIFF, JPEG, PNG.
 
 **Local milestone:** `/api/dev/process-artwork-image` processes one artwork at a time for UI preview/download of temporary derivatives. It does not claim inventory IDs or write to Drive/Sheets.
+
+**TIFF UI previews:** `POST /api/image-preview` generates temporary JPEG thumbnails for selected TIFF masters so artwork cards and Batch Review can show an image. These thumbnails are temporary UI previews only — not archival outputs — and are discarded on replace/remove/batch reset or TTL expiry. Preview failure does not block validation or submission.
 
 ### 8.2 Product upload limits (MVP)
 

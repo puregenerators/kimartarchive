@@ -14,6 +14,7 @@ import {
   getStorageProviderKind,
   UnsupportedStorageProviderError,
 } from "@/lib/storage/provider-kind";
+import type { StorageProvider } from "@/lib/storage/types";
 
 type TestCase = { name: string; run: () => void | Promise<void> };
 
@@ -191,7 +192,7 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "create folder, upload three files, record Dropbox shared URLs",
+    name: "create folder, upload three images plus Inventory-ID metadata file, record Dropbox shared URLs",
     run: async () => {
       const ops = createMockOps();
       const storage = createDropboxStorageProvider(async () => ops);
@@ -219,10 +220,29 @@ const tests: TestCase[] = [
         mimeType: "image/jpeg",
         contents: Buffer.from("web-bytes"),
       });
+      const metadataFilename = "1000_metadata.json";
+      const metadataJson = JSON.stringify(
+        {
+          schemaVersion: 1,
+          inventoryId: 1000,
+          title: "Blue Garden",
+          files: { metadata: { filename: metadataFilename } },
+        },
+        null,
+        2,
+      );
+      const metadata = await storage.uploadFile({
+        parentId: folder.id,
+        name: metadataFilename,
+        mimeType: "application/json",
+        contents: Buffer.from(metadataJson, "utf8"),
+      });
 
       assertTrue(master.webViewLink.includes("dropbox.com"), "master url");
       assertTrue(hr.webViewLink.includes("dropbox.com"), "hr url");
       assertTrue(web.webViewLink.includes("dropbox.com"), "web url");
+      assertTrue(metadata.webViewLink.includes("dropbox.com"), "metadata url");
+      assertEqual(metadata.name, "1000_metadata.json", "metadata filename");
       assertEqual(
         await ops.pathExists(
           "/2026_KO_1000_BlueGarden/2026_KO_1000_BlueGarden_master_01.jpg",
@@ -230,15 +250,96 @@ const tests: TestCase[] = [
         true,
         "master exists",
       );
+      assertEqual(
+        await ops.pathExists("/2026_KO_1000_BlueGarden/1000_metadata.json"),
+        true,
+        "metadata file exists",
+      );
+      const downloaded = await ops.downloadFile(
+        "/2026_KO_1000_BlueGarden/1000_metadata.json",
+      );
+      assertEqual(
+        JSON.parse(downloaded.toString("utf8")).schemaVersion,
+        1,
+        "metadata JSON valid",
+      );
       // Neutral Sheet columns receive these same shared URLs from either provider.
       assertTrue(
         [
           master.webViewLink,
           hr.webViewLink,
           web.webViewLink,
+          metadata.webViewLink,
           folder.webViewLink,
         ].every((u) => u.includes("dropbox.com")),
         "neutral URL columns hold Dropbox links",
+      );
+    },
+  },
+  {
+    name: "Drive-shaped StorageProvider uploads Inventory-ID metadata file like any other file",
+    run: async () => {
+      const files = new Map<string, { mimeType: string; contents: Buffer }>();
+      const storage: StorageProvider = {
+        kind: "drive",
+        async verifyReady() {
+          return { ok: true, rootName: "Archive", archiveRootUrl: null };
+        },
+        async findChildFolderByName() {
+          return null;
+        },
+        async createArtworkFolder(name) {
+          return {
+            id: "folder-id",
+            name,
+            webViewLink: "https://drive.google.com/drive/folders/folder-id",
+          };
+        },
+        async uploadFile(params) {
+          files.set(params.name, {
+            mimeType: params.mimeType,
+            contents: Buffer.from(params.contents),
+          });
+          return {
+            id: `file-${params.name}`,
+            name: params.name,
+            webViewLink: `https://drive.google.com/file/d/${params.name}`,
+          };
+        },
+        async moveFolderToFailedIntake() {},
+        getArchiveRootUrl() {
+          return null;
+        },
+      };
+
+      const folder = await storage.createArtworkFolder("2026_KO_1000_BlueGarden");
+      await storage.uploadFile({
+        parentId: folder.id,
+        name: "master.tif",
+        mimeType: "image/tiff",
+        contents: Buffer.from("master"),
+      });
+      const meta = await storage.uploadFile({
+        parentId: folder.id,
+        name: "1000_metadata.json",
+        mimeType: "application/json",
+        contents: Buffer.from(
+          JSON.stringify({ schemaVersion: 1 }, null, 2),
+          "utf8",
+        ),
+      });
+
+      assertEqual(meta.name, "1000_metadata.json", "drive metadata name");
+      assertEqual(
+        files.get("1000_metadata.json")?.mimeType,
+        "application/json",
+        "mime",
+      );
+      assertEqual(
+        JSON.parse(files.get("1000_metadata.json")!.contents.toString("utf8"))
+          .schemaVersion,
+        1,
+        "drive metadata JSON",
       );
     },
   },

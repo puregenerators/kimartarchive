@@ -1,10 +1,14 @@
 "use client";
 
 import { useId, useRef, useState, type ReactNode } from "react";
+import {
+  ArtworkImageThumb,
+  ArtworkImageThumbFooterNote,
+} from "@/components/artwork/ArtworkImageThumb";
+import { MediumField } from "@/components/artwork/MediumField";
 import { replaceArtworkImage } from "@/lib/artwork/batch-files";
 import {
   DIMENSION_UNITS,
-  STATUS_VALUES,
   formatArtworkNumber,
   previewInventoryIdForIndex,
   type ArtworkDraft,
@@ -16,6 +20,7 @@ import {
   describeImageType,
   formatFileSize,
 } from "@/lib/artwork/validation";
+import type { TiffPreviewState } from "@/lib/images/preview-client";
 
 type ArtworkCardProps = {
   artwork: ArtworkDraft;
@@ -27,7 +32,8 @@ type ArtworkCardProps = {
   onMoveUp: () => void;
   onMoveDown: () => void;
   /** Called after a successful image replace so the parent can clear processing. */
-  onImageReplaced?: () => void;
+  onImageReplaced?: (next: ArtworkDraft) => void;
+  tiffPreview?: TiffPreviewState;
 };
 
 const inputClass =
@@ -84,6 +90,7 @@ export function ArtworkCard({
   onMoveUp,
   onMoveDown,
   onImageReplaced,
+  tiffPreview,
 }: ArtworkCardProps) {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -91,7 +98,6 @@ export function ArtworkCard({
   const [showMore, setShowMore] = useState(
     Boolean(
       artwork.depth.trim() ||
-        artwork.edition.trim() ||
         artwork.notes.trim() ||
         artwork.overrides.exhibition ||
         artwork.overrides.gallery ||
@@ -113,6 +119,7 @@ export function ArtworkCard({
       ...artwork,
       title: value,
       titleSuggestedFromFilename: false,
+      titleArtistAliasRemoved: false,
     });
   }
 
@@ -135,7 +142,7 @@ export function ArtworkCard({
     setImageError(null);
     revokeImage(result.previousImage);
     onChange(result.artwork);
-    onImageReplaced?.();
+    onImageReplaced?.(result.artwork);
   }
 
   return (
@@ -203,27 +210,10 @@ export function ArtworkCard({
             className="group relative flex h-28 w-full flex-col overflow-hidden border border-dashed border-[var(--line)] bg-[var(--surface-muted)] text-left transition hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
             aria-describedby={shownImageError ? `${inputId}-error` : undefined}
           >
-            {artwork.image?.previewUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={artwork.image.previewUrl}
-                alt={`Preview of ${artwork.image.file.name}`}
-                className="h-full w-full object-cover"
-              />
-            ) : artwork.image?.isTiff ? (
-              <div className="flex h-full flex-col items-center justify-center gap-1 px-2 text-center">
-                <span className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
-                  TIFF
-                </span>
-                <span className="text-[10px] text-[var(--muted)]">
-                  Preview unavailable
-                </span>
-              </div>
-            ) : (
-              <div className="flex h-full flex-col items-center justify-center gap-1 px-2 text-center">
-                <span className="text-xs text-[var(--ink)]">Add image</span>
-              </div>
-            )}
+            <ArtworkImageThumb
+              image={artwork.image}
+              tiffPreview={tiffPreview}
+            />
           </button>
           {artwork.image ? (
             <div className="mt-1.5 space-y-0.5">
@@ -237,6 +227,10 @@ export function ArtworkCard({
                 {describeImageType(artwork.image.file)} ·{" "}
                 {formatFileSize(artwork.image.file.size)}
               </p>
+              <ArtworkImageThumbFooterNote
+                image={artwork.image}
+                tiffPreview={tiffPreview}
+              />
               <button
                 type="button"
                 onClick={() => inputRef.current?.click()}
@@ -266,7 +260,9 @@ export function ArtworkCard({
               error={errors?.title}
               hint={
                 artwork.titleSuggestedFromFilename
-                  ? "Suggested from filename — edit freely"
+                  ? artwork.titleArtistAliasRemoved
+                    ? "Removed artist name from filename."
+                    : "Suggested from filename — edit freely"
                   : undefined
               }
             >
@@ -295,19 +291,18 @@ export function ArtworkCard({
             </Field>
           </div>
           <div className="sm:col-span-5">
-            <Field
+            <MediumField
               id={`${artwork.id}-medium`}
+              value={artwork.medium}
+              onChange={(medium) => patch("medium", medium)}
               label="Medium"
+              customLabel="Specify medium"
+              customHint="Examples: Watercolor, Drawing, Mixed media, Sculpture, Collage"
               required
               error={errors?.medium}
-            >
-              <input
-                id={`${artwork.id}-medium`}
-                value={artwork.medium}
-                onChange={(e) => patch("medium", e.target.value)}
-                className={inputClass}
-              />
-            </Field>
+              inputClassName={inputClass}
+              FieldWrapper={Field}
+            />
           </div>
           <div className="sm:col-span-1">
             <Field
@@ -367,29 +362,6 @@ export function ArtworkCard({
               </select>
             </Field>
           </div>
-          <div className="sm:col-span-2">
-            <Field
-              id={`${artwork.id}-status`}
-              label="Status"
-              error={errors?.status}
-            >
-              <select
-                id={`${artwork.id}-status`}
-                value={artwork.status}
-                onChange={(e) =>
-                  patch("status", e.target.value as ArtworkDraft["status"])
-                }
-                className={inputClass}
-              >
-                <option value="">Select</option>
-                {STATUS_VALUES.map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
         </div>
       </div>
 
@@ -401,7 +373,7 @@ export function ArtworkCard({
           aria-expanded={showMore}
         >
           {showMore ? "Hide additional details" : "Additional details"} · depth,
-          edition, location, notes, overrides
+          notes, overrides
         </button>
         {showMore ? (
           <div className="mt-3 grid gap-2 sm:grid-cols-3">
@@ -411,22 +383,6 @@ export function ArtworkCard({
                 inputMode="decimal"
                 value={artwork.depth}
                 onChange={(e) => patch("depth", e.target.value)}
-                className={inputClass}
-              />
-            </Field>
-            <Field id={`${artwork.id}-edition`} label="Edition">
-              <input
-                id={`${artwork.id}-edition`}
-                value={artwork.edition}
-                onChange={(e) => patch("edition", e.target.value)}
-                className={inputClass}
-              />
-            </Field>
-            <Field id={`${artwork.id}-location`} label="Location">
-              <input
-                id={`${artwork.id}-location`}
-                value={artwork.location}
-                onChange={(e) => patch("location", e.target.value)}
                 className={inputClass}
               />
             </Field>

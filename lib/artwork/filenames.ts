@@ -5,6 +5,8 @@ export type PlannedFilenames = {
   master: string;
   hr: string;
   web: string;
+  /** Inventory-ID-based portable metadata filename. */
+  metadata: string;
 };
 
 /** Strip combining marks so accented letters become ASCII equivalents. */
@@ -81,6 +83,15 @@ export function buildArtworkFilename(params: {
 }
 
 /**
+ * Portable metadata filename keyed by Inventory ID so the file remains
+ * identifiable if copied or downloaded outside its artwork folder.
+ * Example: `1000_metadata.json`
+ */
+export function buildArtworkMetadataFilename(inventoryId: number): string {
+  return `${inventoryId}_metadata.json`;
+}
+
+/**
  * Plan master / HR / web filenames for one artwork with a single master image.
  * Sequence is always 01 in the batch intake workflow.
  */
@@ -118,6 +129,7 @@ export function planFilenamesForArtwork(params: {
       sequence: 1,
       extension: ".jpg",
     }),
+    metadata: buildArtworkMetadataFilename(params.inventoryId),
   };
 }
 
@@ -158,6 +170,7 @@ export function planFilenamesForMasters(params: {
         sequence: sequenceIndex,
         extension: ".jpg",
       }),
+      metadata: buildArtworkMetadataFilename(params.inventoryId),
     };
   });
 }

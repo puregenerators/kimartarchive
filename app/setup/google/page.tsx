@@ -15,7 +15,7 @@ export default async function SetupGooglePage() {
   return (
     <main className="relative mx-auto w-full max-w-3xl flex-1 px-5 py-12 sm:px-8 sm:py-16">
       <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
-        Kim Artwork Archive
+        Kim Osgood Archive
       </p>
       <h1 className="mt-3 font-display text-4xl tracking-tight text-[var(--ink)]">
         Google sheet tools

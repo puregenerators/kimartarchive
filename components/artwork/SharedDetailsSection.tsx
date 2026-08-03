@@ -1,9 +1,9 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { MediumField } from "@/components/artwork/MediumField";
 import {
   DIMENSION_UNITS,
-  STATUS_VALUES,
   type BatchSharedDetails,
 } from "@/lib/artwork/types";
 
@@ -24,11 +24,15 @@ function Field({
   label,
   children,
   hint,
+  error,
+  required,
 }: {
   id: string;
   label: string;
   children: ReactNode;
   hint?: string;
+  error?: string;
+  required?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
@@ -37,9 +41,15 @@ function Field({
         className="text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]"
       >
         {label}
+        {required ? <span className="text-[var(--danger)]"> *</span> : null}
       </label>
       {children}
       {hint ? <p className="text-xs text-[var(--muted)]">{hint}</p> : null}
+      {error ? (
+        <p role="alert" className="text-xs text-[var(--danger)]">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -122,42 +132,19 @@ export function SharedDetailsSection({
             className={inputClass}
           />
         </Field>
-        <Field id="defaultLocation" label="Default Location">
-          <input
-            id="defaultLocation"
-            value={shared.defaultLocation}
-            onChange={(e) => onChange("defaultLocation", e.target.value)}
-            className={inputClass}
-          />
-        </Field>
-        <Field id="defaultMedium" label="Default Medium">
-          <input
+        <div className="sm:col-span-1">
+          <MediumField
             id="defaultMedium"
             value={shared.defaultMedium}
-            onChange={(e) => onChange("defaultMedium", e.target.value)}
-            className={inputClass}
+            onChange={(medium) => onChange("defaultMedium", medium)}
+            allowBlank
+            label="Default Medium"
+            customLabel="Specify default medium"
+            customHint="Examples: Watercolor, Drawing, Mixed media, Sculpture, Collage"
+            inputClassName={inputClass}
+            FieldWrapper={Field}
           />
-        </Field>
-        <Field id="defaultStatus" label="Default Status" hint="Optional">
-          <select
-            id="defaultStatus"
-            value={shared.defaultStatus}
-            onChange={(e) =>
-              onChange(
-                "defaultStatus",
-                e.target.value as BatchSharedDetails["defaultStatus"],
-              )
-            }
-            className={inputClass}
-          >
-            <option value="">Select status</option>
-            {STATUS_VALUES.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
-          </select>
-        </Field>
+        </div>
         <Field id="defaultDimensionUnit" label="Default Dimension Unit">
           <select
             id="defaultDimensionUnit"

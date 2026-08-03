@@ -12,17 +12,39 @@ const TEMP_ROOT_NAME = "kimartarchive-image-processing";
 
 export type TempAssetKind = "hr" | "web";
 
-export type TempProcessingManifest = {
+type TempManifestBase = {
   resultId: string;
   createdAt: number;
   expiresAt: number;
   artworkId: string | null;
+};
+
+export type TempProcessingManifest = TempManifestBase & {
+  kind?: "processing";
   masterFilename: string;
   hr: Omit<ProcessedImageOutput, "format"> & { format: "jpeg"; storedName: string };
   web: Omit<ProcessedImageOutput, "format"> & { format: "jpeg"; storedName: string };
   sourceOriginalFilename: string;
   warnings: string[];
 };
+
+export type TempPreviewManifest = TempManifestBase & {
+  kind: "preview";
+  sourceOriginalFilename: string;
+  isMultiPage: boolean;
+  pageCount: number | null;
+  preview: {
+    width: number;
+    height: number;
+    byteLength: number;
+    format: "jpeg";
+    quality: number;
+    wasResized: boolean;
+    storedName: string;
+  };
+};
+
+type AnyTempManifest = TempProcessingManifest | TempPreviewManifest;
 
 function tempRootDir(): string {
   return path.join(os.tmpdir(), TEMP_ROOT_NAME);
@@ -42,13 +64,25 @@ async function ensureRoot(): Promise<void> {
   await fs.mkdir(tempRootDir(), { recursive: true });
 }
 
-async function readManifest(resultId: string): Promise<TempProcessingManifest | null> {
+async function readAnyManifest(resultId: string): Promise<AnyTempManifest | null> {
   try {
     const raw = await fs.readFile(path.join(resultDir(resultId), "manifest.json"), "utf8");
-    return JSON.parse(raw) as TempProcessingManifest;
+    return JSON.parse(raw) as AnyTempManifest;
   } catch {
     return null;
   }
+}
+
+function isPreviewManifest(
+  manifest: AnyTempManifest,
+): manifest is TempPreviewManifest {
+  return (manifest as TempPreviewManifest).kind === "preview";
+}
+
+function isProcessingManifest(
+  manifest: AnyTempManifest,
+): manifest is TempProcessingManifest {
+  return !isPreviewManifest(manifest) && "hr" in manifest && "web" in manifest;
 }
 
 async function removeDirQuiet(dir: string): Promise<void> {
@@ -78,7 +112,7 @@ export async function cleanupExpiredTempResults(
       removed += 1;
       continue;
     }
-    const manifest = await readManifest(entry);
+    const manifest = await readAnyManifest(entry);
     if (!manifest || manifest.expiresAt <= now) {
       await removeDirQuiet(resultDir(entry));
       removed += 1;
@@ -130,6 +164,7 @@ export async function storeTempProcessingOutputs(
     const expiresAt = createdAt + IMAGE_PROCESSING_CONFIG.tempTtlMs;
 
     const manifest: TempProcessingManifest = {
+      kind: "processing",
       resultId,
       createdAt,
       expiresAt,
@@ -179,6 +214,87 @@ export async function storeTempProcessingOutputs(
   }
 }
 
+export type StoreTempPreviewInput = {
+  artworkId?: string | null;
+  sourceOriginalFilename: string;
+  isMultiPage: boolean;
+  pageCount: number | null;
+  preview: {
+    buffer: Buffer;
+    width: number;
+    height: number;
+    byteLength: number;
+    quality: number;
+    wasResized: boolean;
+  };
+};
+
+export type StoreTempPreviewResult = {
+  resultId: string;
+  expiresAt: number;
+  previewUrl: string;
+};
+
+/**
+ * Write a UI-only preview JPEG under the same OS temp root as HR/web results.
+ * Opaque result IDs only — never filesystem paths to the client.
+ */
+export async function storeTempPreviewOutput(
+  input: StoreTempPreviewInput,
+): Promise<StoreTempPreviewResult> {
+  await cleanupExpiredTempResults();
+  await ensureRoot();
+
+  const resultId = randomUUID();
+  const dir = resultDir(resultId);
+  const storedName = "preview.jpg";
+
+  try {
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(path.join(dir, storedName), input.preview.buffer, {
+      mode: 0o600,
+    });
+
+    const createdAt = Date.now();
+    const expiresAt = createdAt + IMAGE_PROCESSING_CONFIG.tempTtlMs;
+
+    const manifest: TempPreviewManifest = {
+      kind: "preview",
+      resultId,
+      createdAt,
+      expiresAt,
+      artworkId: input.artworkId ?? null,
+      sourceOriginalFilename: input.sourceOriginalFilename,
+      isMultiPage: input.isMultiPage,
+      pageCount: input.pageCount,
+      preview: {
+        width: input.preview.width,
+        height: input.preview.height,
+        byteLength: input.preview.byteLength,
+        format: "jpeg",
+        quality: input.preview.quality,
+        wasResized: input.preview.wasResized,
+        storedName,
+      },
+    };
+
+    await fs.writeFile(
+      path.join(dir, "manifest.json"),
+      JSON.stringify(manifest),
+      { mode: 0o600 },
+    );
+
+    return {
+      resultId,
+      expiresAt,
+      previewUrl: `/api/image-preview/${resultId}`,
+    };
+  } catch (error) {
+    await removeDirQuiet(dir);
+    throw error;
+  }
+}
+
 export async function getTempAsset(
   resultId: string,
   asset: TempAssetKind,
@@ -192,8 +308,8 @@ export async function getTempAsset(
 
   await cleanupExpiredTempResults();
 
-  const manifest = await readManifest(resultId);
-  if (!manifest) return null;
+  const manifest = await readAnyManifest(resultId);
+  if (!manifest || !isProcessingManifest(manifest)) return null;
   if (manifest.expiresAt <= Date.now()) {
     await removeDirQuiet(resultDir(resultId));
     return null;
@@ -221,7 +337,47 @@ export async function getTempAsset(
   }
 }
 
-/** Remove a result directory after a failed partial write. */
+export async function getTempPreviewAsset(resultId: string): Promise<{
+  buffer: Buffer;
+  contentType: "image/jpeg";
+  filename: string;
+  expiresAt: number;
+  isMultiPage: boolean;
+  pageCount: number | null;
+} | null> {
+  if (!isOpaqueResultId(resultId)) return null;
+
+  await cleanupExpiredTempResults();
+
+  const manifest = await readAnyManifest(resultId);
+  if (!manifest || !isPreviewManifest(manifest)) return null;
+  if (manifest.expiresAt <= Date.now()) {
+    await removeDirQuiet(resultDir(resultId));
+    return null;
+  }
+
+  const filePath = path.join(resultDir(resultId), manifest.preview.storedName);
+  const resolved = path.resolve(filePath);
+  if (!resolved.startsWith(path.resolve(resultDir(resultId)) + path.sep)) {
+    return null;
+  }
+
+  try {
+    const buffer = await fs.readFile(resolved);
+    return {
+      buffer,
+      contentType: "image/jpeg",
+      filename: "preview.jpg",
+      expiresAt: manifest.expiresAt,
+      isMultiPage: manifest.isMultiPage,
+      pageCount: manifest.pageCount,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Remove a result directory after a failed partial write or client cleanup. */
 export async function discardTempResult(resultId: string): Promise<void> {
   if (!isOpaqueResultId(resultId)) return;
   await removeDirQuiet(resultDir(resultId));

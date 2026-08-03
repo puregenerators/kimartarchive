@@ -12,6 +12,11 @@ import {
 import { processArtworkImage } from "@/lib/images/process-artwork-image";
 import { logSubmissionEvent } from "@/lib/submission/audit-log";
 import {
+  ARTWORK_METADATA_MIME_TYPE,
+  buildPortableArtworkMetadata,
+  portableArtworkMetadataBuffer,
+} from "@/lib/submission/artwork-metadata";
+import {
   buildArtworkFolderName,
   isoNow,
   resolveArtworkMetadata,
@@ -202,6 +207,7 @@ export async function processOneArtwork(
   let master: DriveResourceRef | null = null;
   let hr: DriveResourceRef | null = null;
   let web: DriveResourceRef | null = null;
+  let metadataFile: DriveResourceRef | null = null;
   let sheetRowWritten = false;
   let lastCompletedStage: ArtworkSubmissionStage = "claimed";
 
@@ -215,6 +221,7 @@ export async function processOneArtwork(
     master,
     hr,
     web,
+    metadata: metadataFile,
     sheetRowWritten,
     cleanup,
     startedAt,
@@ -284,6 +291,7 @@ export async function processOneArtwork(
         masterId: master?.id,
         hrId: hr?.id,
         webId: web?.id,
+        metadataId: metadataFile?.id,
       },
       detail: [message, options?.causeDetail].filter(Boolean).join(" | "),
     });
@@ -524,6 +532,17 @@ export async function processOneArtwork(
     webBuffer = Buffer.alloc(0);
     web = uploaded;
     lastCompletedStage = "web_uploaded";
+    logSubmissionEvent({
+      event: "stage",
+      submissionAttemptId: params.submissionAttemptId,
+      clientArtworkId: params.artwork.clientArtworkId,
+      inventoryId: params.claim.inventoryId,
+      claimId: params.claim.claimId,
+      stage: "web_uploaded",
+      lastCompletedStage,
+      nextOperation: "upload_metadata",
+      resourceIds: { webId: web.id },
+    });
   } catch (error) {
     const mapped = mapProcessingError(error);
     return fail("DRIVE_UPLOAD_FAILED", mapped.message, "upload_web", {
@@ -533,8 +552,75 @@ export async function processOneArtwork(
     });
   }
 
-  // 7. Append inventory row (only after all three files exist)
+  // 7. Generate + upload portable metadata file (before Sheet append)
   const createdAt = isoNow();
+  try {
+    const portable = buildPortableArtworkMetadata({
+      inventoryId: params.claim.inventoryId,
+      metadata,
+      master: master!,
+      hr: hr!,
+      web: web!,
+      folder: driveFolder!,
+      metadataFilename: planned.metadata,
+      createdAt,
+    });
+    const metadataBytes = portableArtworkMetadataBuffer(portable);
+
+    logSubmissionEvent({
+      event: "operation",
+      submissionAttemptId: params.submissionAttemptId,
+      clientArtworkId: params.artwork.clientArtworkId,
+      inventoryId: params.claim.inventoryId,
+      claimId: params.claim.claimId,
+      lastCompletedStage,
+      nextOperation: "upload_metadata",
+      detail: `filename=${planned.metadata}; bytes=${metadataBytes.byteLength}`,
+    });
+
+    await writeTempFile(
+      params.artworkTempDir,
+      planned.metadata,
+      metadataBytes,
+    );
+
+    metadataFile = await params.storage.uploadFile({
+      parentId: driveFolder!.id,
+      name: planned.metadata,
+      mimeType: ARTWORK_METADATA_MIME_TYPE,
+      contents: metadataBytes,
+    });
+    lastCompletedStage = "metadata_uploaded";
+    logSubmissionEvent({
+      event: "stage",
+      submissionAttemptId: params.submissionAttemptId,
+      clientArtworkId: params.artwork.clientArtworkId,
+      inventoryId: params.claim.inventoryId,
+      claimId: params.claim.claimId,
+      stage: "metadata_uploaded",
+      lastCompletedStage,
+      nextOperation: "append_inventory_row",
+      resourceIds: { metadataId: metadataFile.id },
+    });
+  } catch (error) {
+    const mapped = mapProcessingError(error);
+    warnings.push({
+      code: "DRIVE_FILES_WITHOUT_METADATA",
+      message: `Master, high-resolution, and web images uploaded successfully, but ${planned.metadata} could not be created or uploaded.`,
+    });
+    return fail(
+      "DRIVE_UPLOAD_FAILED",
+      `The master, high-resolution, and web images uploaded successfully, but ${planned.metadata} could not be created or uploaded. The claimed Inventory ID, artwork folder, and image files are preserved for safe retry. ${mapped.message}`,
+      "upload_metadata",
+      {
+        httpStatus: mapped.httpStatus,
+        googleReason: mapped.googleReason,
+        causeDetail: mapped.causeDetail,
+      },
+    );
+  }
+
+  // 8. Append inventory row (only after images + metadata exist)
   try {
     const row = buildArtworkInventoryRow({
       inventoryId: params.claim.inventoryId,
@@ -558,7 +644,7 @@ export async function processOneArtwork(
     const mapped = mapProcessingError(error);
     warnings.push({
       code: "DRIVE_FILES_WITHOUT_INVENTORY_ROW",
-      message: `All three ${storageLabel} files were uploaded, but the Artwork Inventory row was not written.`,
+      message: `Archive image files and ${planned.metadata} were uploaded, but the Artwork Inventory row was not written.`,
     });
     return fail(
       "SHEET_APPEND_FAILED",
@@ -572,7 +658,7 @@ export async function processOneArtwork(
     );
   }
 
-  // 8. Mark claim Completed
+  // 9. Mark claim Completed
   const completedAt = isoNow();
   const completedMark = await markClaim(
     params.spreadsheetId,
@@ -603,6 +689,7 @@ export async function processOneArtwork(
         masterId: master!.id,
         hrId: hr!.id,
         webId: web!.id,
+        metadataId: metadataFile!.id,
       },
       detail: completedMark.reason,
     });
@@ -617,6 +704,7 @@ export async function processOneArtwork(
       master: master!,
       hr: hr!,
       web: web!,
+      metadata: metadataFile!,
       sheetRowWritten: true,
       claimStatus: "Processing",
       reconciliationWarnings: warnings,
@@ -639,6 +727,7 @@ export async function processOneArtwork(
       masterId: master!.id,
       hrId: hr!.id,
       webId: web!.id,
+      metadataId: metadataFile!.id,
     },
   });
 
@@ -652,6 +741,7 @@ export async function processOneArtwork(
     master: master!,
     hr: hr!,
     web: web!,
+    metadata: metadataFile!,
     sheetRowWritten: true,
     claimStatus: "Completed",
     reconciliationWarnings: warnings,
