@@ -24,7 +24,8 @@ Derivative settings live only in `lib/images/config.ts` and must not be duplicat
 | JPEG | `.jpg`, `.jpeg` | Browser preview via object URL |
 | PNG | `.png` | Transparency flattened to white |
 
-- Maximum source size: **150 MB**
+- Maximum source size for **direct upload**: **150 MB**
+- Masters over 150 MB use **large-file Dropbox intake**. Processing still inspects pixel dimensions, bit depth, and estimated memory before decode. Unsafe files are labeled **Local processing required**.
 - Format is determined with **Sharp metadata**, not the filename extension alone
 - Unsupported or unreadable files return a clear structured error
 
@@ -34,7 +35,7 @@ Derivative settings live only in `lib/images/config.ts` and must not be duplicat
 
 Before generating derivatives or UI thumbnails, the server:
 
-1. Rejects empty files and files over 150 MB
+1. Rejects empty files. Direct-upload processing still rejects files over 150 MB. Large-file Dropbox intake may process a larger master only after the Vercel memory safety check.
 2. Decodes metadata with Sharp (`failOn: "error"`)
 3. Confirms the detected format is jpeg / png / tiff
 4. Requires width and height

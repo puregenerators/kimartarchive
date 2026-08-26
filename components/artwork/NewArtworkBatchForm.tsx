@@ -6,6 +6,7 @@ import { BatchImageUploader } from "@/components/artwork/BatchImageUploader";
 import { BatchReview } from "@/components/artwork/BatchReview";
 import { BatchSummaryBar } from "@/components/artwork/BatchSummaryBar";
 import { ClearBatchConfirmationView } from "@/components/artwork/ClearBatchConfirmationView";
+import { IncompleteLargeFileResume } from "@/components/artwork/IncompleteLargeFileResume";
 import { SharedDetailsSection } from "@/components/artwork/SharedDetailsSection";
 import { useTiffPreviews } from "@/components/artwork/useTiffPreviews";
 import {
@@ -32,6 +33,7 @@ import {
   formatArtworkNumber,
   previewInventoryIdForIndex,
   remainingArtworkSlots,
+  requiresLargeFileDropboxIntake,
   type ApplyableSharedFieldKey,
   type ArtworkDraft,
   type BatchDraft,
@@ -148,8 +150,16 @@ export function NewArtworkBatchForm({
     }
 
     if (result.added.length > 0) {
+      const largeCount = result.added.filter(
+        (artwork) =>
+          artwork.image &&
+          requiresLargeFileDropboxIntake(artwork.image.file.size),
+      ).length;
+      const created = `${result.added.length} image${result.added.length === 1 ? "" : "s"} selected · ${result.added.length} artwork entr${result.added.length === 1 ? "y" : "ies"} created`;
       setUploadNotice(
-        `${result.added.length} image${result.added.length === 1 ? "" : "s"} selected · ${result.added.length} artwork entr${result.added.length === 1 ? "y" : "ies"} created`,
+        largeCount > 0
+          ? `${created}. ${largeCount} file${largeCount === 1 ? "" : "s"} exceed the direct-upload limit — after review, prepare large-file intake instead of rejecting them.`
+          : created,
       );
       requestAnimationFrame(() => {
         artworksSectionRef.current?.scrollIntoView({
@@ -362,6 +372,8 @@ export function NewArtworkBatchForm({
           </p>
         ) : null}
       </header>
+
+      <IncompleteLargeFileResume />
 
       <form
         key={formEpoch}

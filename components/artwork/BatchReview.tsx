@@ -11,9 +11,11 @@ import {
 import { ProcessingResultPanel } from "@/components/artwork/ProcessingResultPanel";
 import { planFilenamesForArtwork } from "@/lib/artwork/filenames";
 import {
+  MAX_FILE_SIZE_LABEL,
   effectiveOverride,
   formatArtworkNumber,
   previewInventoryIdForIndex,
+  requiresLargeFileDropboxIntake,
   type ArtworkDraft,
   type BatchSharedDetails,
 } from "@/lib/artwork/types";
@@ -42,11 +44,42 @@ import {
   batchDraftToSubmissionPayload,
 } from "@/lib/submission/validate-input";
 import { uploadMasterToTemporaryLink } from "@/lib/submission/browser-master-upload";
+import { LargeMasterIntakePanel } from "@/components/artwork/LargeMasterIntakePanel";
 import type { PreparedArtwork } from "@/lib/submission/direct-intake-types";
+import type {
+  LargeFileCheckResult,
+  LargeFileIntakeStatus,
+} from "@/lib/submission/large-file-intake-logic";
 import type {
   ArtworkSubmissionResult,
   BatchSubmissionResult,
 } from "@/lib/submission/types";
+
+type LargeFilePanelState = {
+  clientArtworkId: string;
+  title: string;
+  claimId: string;
+  inventoryId: number;
+  folderName: string;
+  masterFilename: string;
+  folderWebUrl: string | null;
+  status: LargeFileIntakeStatus;
+  message: string;
+  canContinueProcessing: boolean;
+  checking?: boolean;
+  processing?: boolean;
+  byteLengthLabel?: string | null;
+  dimensionsLabel?: string | null;
+  result?: ArtworkSubmissionResult;
+};
+
+function largeFileDimensionsLabel(check: LargeFileCheckResult): string | null {
+  if (check.width && check.height) {
+    const depth = check.bitDepth ? ` · ${check.bitDepth}-bit` : "";
+    return `${check.width}×${check.height}px${depth}`;
+  }
+  return null;
+}
 
 type ArchiveTargetProp = "test" | "production" | "invalid";
 
@@ -312,6 +345,13 @@ function ReviewArtworkCard({
           <h3 className="mt-1 font-display text-2xl text-[var(--ink)]">
             {archivedTitle}
           </h3>
+          {artwork.image &&
+          requiresLargeFileDropboxIntake(artwork.image.file.size) ? (
+            <p className="mt-2 text-sm text-[var(--ink)]">
+              This master is over {MAX_FILE_SIZE_LABEL}. Direct upload cannot
+              be used. Prepare large-file intake, then upload through Dropbox.
+            </p>
+          ) : null}
           <dl className="mt-3">
             <MetaRow label="Title" value={archivedTitle} />
             <MetaRow label="Year" value={artwork.year} />
@@ -357,13 +397,24 @@ function ReviewArtworkCard({
           <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-[var(--line)] pt-4">
             <button
               type="button"
-              disabled={!artwork.image || !plan || isBusy || locked}
+              disabled={
+                !artwork.image ||
+                !plan ||
+                isBusy ||
+                locked ||
+                requiresLargeFileDropboxIntake(artwork.image.file.size)
+              }
               onClick={() => {
                 void handleTestProcessing();
               }}
               className="border border-[var(--ink)] bg-[var(--ink)] px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--paper)] transition enabled:hover:bg-[var(--ink-soft)] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
             >
-              {isBusy ? "Processing…" : "Test image processing"}
+              {isBusy
+              ? "Processing…"
+              : artwork.image &&
+                  requiresLargeFileDropboxIntake(artwork.image.file.size)
+                ? "Use Dropbox intake"
+                : "Test image processing"}
             </button>
             <p className="text-sm text-[var(--muted)]" aria-live="polite">
               Status:{" "}
@@ -442,6 +493,9 @@ export function BatchReview({
   const [intakeProgress, setIntakeProgress] = useState<IntakeProgressItem[]>(
     [],
   );
+  const [largeFilePanels, setLargeFilePanels] = useState<LargeFilePanelState[]>(
+    [],
+  );
   const [submissionResult, setSubmissionResult] = useState<Extract<
     BatchSubmissionResult,
     { ok: true }
@@ -449,11 +503,18 @@ export function BatchReview({
   const attemptIdRef = useRef<string | null>(null);
   const preparedRef = useRef<PreparedArtwork[] | null>(null);
   const submitStartedRef = useRef<number | null>(null);
+  const directResultsRef = useRef<ArtworkSubmissionResult[]>([]);
+  const preparedMetaRef = useRef<{
+    submissionAttemptId: string;
+    archiveTarget: "test" | "production";
+    sheetUrl: string | null;
+    driveRootUrl: string | null;
+  } | null>(null);
 
   const anyBusy = artworks.some(
     (artwork) => processingByArtworkId[artwork.id]?.status === "processing",
   );
-  const locked = submitting || Boolean(submissionResult);
+  const locked = submitting || Boolean(submissionResult) || largeFilePanels.length > 0;
 
   const nextUnprocessed = artworks.find((artwork, index) => {
     const state = processingByArtworkId[artwork.id] ?? { status: "idle" };
@@ -462,6 +523,10 @@ export function BatchReview({
   });
 
   const sourceBytes = totalSourceBytes(artworks);
+  const largeMasterCount = artworks.filter(
+    (artwork) =>
+      artwork.image && requiresLargeFileDropboxIntake(artwork.image.file.size),
+  ).length;
 
   useEffect(() => {
     if (!submitting) return;
@@ -589,7 +654,14 @@ export function BatchReview({
       }
 
       preparedRef.current = prepared.artworks;
+      preparedMetaRef.current = {
+        submissionAttemptId: prepared.submissionAttemptId,
+        archiveTarget: prepared.archiveTarget,
+        sheetUrl: prepared.sheetUrl,
+        driveRootUrl: prepared.driveRootUrl,
+      };
       const results: ArtworkSubmissionResult[] = [];
+      const nextLargePanels: LargeFilePanelState[] = [];
 
       for (const ready of prepared.artworks) {
         const artwork = payload.artworks.find(
@@ -603,6 +675,34 @@ export function BatchReview({
           setItem(ready.clientArtworkId, title, {
             stage: "Failed",
             error: "Source file is missing from this browser session.",
+          });
+          continue;
+        }
+
+        if (
+          ready.requiresManualDropboxUpload ||
+          requiresLargeFileDropboxIntake(file.size)
+        ) {
+          nextLargePanels.push({
+            clientArtworkId: ready.clientArtworkId,
+            title,
+            claimId: ready.claimId,
+            inventoryId: ready.inventoryId,
+            folderName: ready.folderName,
+            masterFilename: ready.masterFilename,
+            folderWebUrl: ready.folderWebUrl,
+            status: ready.masterAlreadyUploaded
+              ? "master_found"
+              : "waiting_for_dropbox",
+            message: ready.masterAlreadyUploaded
+              ? "A file is already at the reserved master path. Check it before continuing."
+              : "Inventory ID reserved. Upload the expected filename through Dropbox, then check.",
+            canContinueProcessing: false,
+          });
+          setItem(ready.clientArtworkId, title, {
+            stage: "Waiting for Dropbox upload",
+            percent: null,
+            error: null,
           });
           continue;
         }
@@ -719,6 +819,13 @@ export function BatchReview({
       ).length;
       const failed = results.filter((result) => !result.ok).length;
 
+      if (nextLargePanels.length > 0) {
+        directResultsRef.current = results;
+        setLargeFilePanels(nextLargePanels);
+        setSubmitting(false);
+        return;
+      }
+
       if (results.length === 0) {
         setSubmitError("No artworks were processed. Check the upload errors and retry.");
         setSubmitting(false);
@@ -745,6 +852,163 @@ export function BatchReview({
         "Could not finish submission. The master may already be in Dropbox. Retry processing before starting a new attempt.",
       );
       setSubmitting(false);
+    }
+  }
+
+  async function checkLargeFilePanel(claimId: string, inventoryId: number) {
+    setLargeFilePanels((current) =>
+      current.map((entry) =>
+        entry.claimId === claimId ? { ...entry, checking: true } : entry,
+      ),
+    );
+    try {
+      const response = await fetch("/api/artwork-batches/check-master", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ claimId, inventoryId }),
+      });
+      const data = (await response.json()) as
+        | LargeFileCheckResult
+        | { ok: false; message: string };
+      setLargeFilePanels((current) =>
+        current.map((entry) => {
+          if (entry.claimId !== claimId) return entry;
+          if (!data.ok) {
+            return {
+              ...entry,
+              checking: false,
+              status: "failed",
+              message: data.message,
+              canContinueProcessing: false,
+            };
+          }
+          return {
+            ...entry,
+            checking: false,
+            status: data.status,
+            message: data.message,
+            folderWebUrl: data.folderWebUrl,
+            canContinueProcessing: data.canContinueProcessing,
+            byteLengthLabel:
+              data.byteLength != null ? formatFileSize(data.byteLength) : null,
+            dimensionsLabel: largeFileDimensionsLabel(data),
+          };
+        }),
+      );
+    } catch {
+      setLargeFilePanels((current) =>
+        current.map((entry) =>
+          entry.claimId === claimId
+            ? {
+                ...entry,
+                checking: false,
+                status: "failed",
+                message: "Could not check Dropbox for this master.",
+                canContinueProcessing: false,
+              }
+            : entry,
+        ),
+      );
+    }
+  }
+
+  async function continueLargeFilePanel(claimId: string, inventoryId: number) {
+    setLargeFilePanels((current) =>
+      current.map((entry) =>
+        entry.claimId === claimId
+          ? { ...entry, processing: true, status: "processing" }
+          : entry,
+      ),
+    );
+    try {
+      const response = await fetch("/api/artwork-batches/large-file/process", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ claimId, inventoryId }),
+      });
+      const data = (await response.json()) as
+        | ArtworkSubmissionResult
+        | { ok: false; errorCode?: string; message: string };
+      setLargeFilePanels((current) => {
+        const next = current.map((entry) => {
+          if (entry.claimId !== claimId) return entry;
+          if (data.ok) {
+            return {
+              ...entry,
+              processing: false,
+              status: "completed" as const,
+              message: "Derivatives, metadata, and the inventory row are complete.",
+              canContinueProcessing: false,
+              result: data,
+            };
+          }
+          const local =
+            "errorCode" in data && data.errorCode === "LOCAL_PROCESSING_REQUIRED";
+          const nextStatus: LargeFileIntakeStatus = local
+            ? "local_processing_required"
+            : "failed";
+          return {
+            ...entry,
+            processing: false,
+            status: nextStatus,
+            message: data.message,
+            canContinueProcessing: false,
+            result:
+              "ok" in data && data.ok === false && "stage" in data
+                ? data
+                : undefined,
+          };
+        });
+        const terminal = next.every(
+          (entry) =>
+            entry.status === "completed" ||
+            entry.status === "failed" ||
+            entry.status === "local_processing_required",
+        );
+        if (terminal && preparedMetaRef.current) {
+          const largeResults = next
+            .map((entry) => entry.result)
+            .filter((entry): entry is ArtworkSubmissionResult => Boolean(entry));
+          const artworks = [...directResultsRef.current, ...largeResults];
+          if (artworks.length > 0) {
+            queueMicrotask(() => {
+              setSubmissionResult({
+                ok: true,
+                kind: "completed",
+                submissionAttemptId: preparedMetaRef.current!.submissionAttemptId,
+                archiveTarget: preparedMetaRef.current!.archiveTarget,
+                completedAt: new Date().toISOString(),
+                total: artworks.length,
+                completed: artworks.filter(
+                  (result) => result.ok && result.stage === "completed",
+                ).length,
+                failed: artworks.filter((result) => !result.ok).length,
+                reconciliationRequired: artworks.filter(
+                  (result) => result.ok && result.stage === "reconciliation_required",
+                ).length,
+                artworks,
+                sheetUrl: preparedMetaRef.current!.sheetUrl,
+                driveRootUrl: preparedMetaRef.current!.driveRootUrl,
+              });
+            });
+          }
+        }
+        return next;
+      });
+    } catch {
+      setLargeFilePanels((current) =>
+        current.map((entry) =>
+          entry.claimId === claimId
+            ? {
+                ...entry,
+                processing: false,
+                status: "failed",
+                message: "Processing failed. The inventory ID was not replaced.",
+                canContinueProcessing: false,
+              }
+            : entry,
+        ),
+      );
     }
   }
 
@@ -804,6 +1068,18 @@ export function BatchReview({
             </div>
           ) : null}
         </BatchSubmittingStatusView>
+      ) : largeFilePanels.length > 0 ? (
+        <div
+          role="status"
+          className="mt-8 border border-[var(--accent)] bg-[var(--accent-soft)] px-4 py-4 text-sm text-[var(--ink)]"
+        >
+          <p className="font-medium">Large-file intake is waiting on Dropbox</p>
+          <p className="mt-1 text-[var(--muted)]">
+            Inventory IDs are already claimed. Checking or continuing does not
+            allocate a new ID. The Artwork Inventory row is not written until
+            processing succeeds.
+          </p>
+        </div>
       ) : (
         <div
           role="status"
@@ -817,6 +1093,9 @@ export function BatchReview({
             Preview inventory numbers are not final. Optional: test image
             processing locally before submission. Dev test results are not
             reused for permanent delivery.
+            {largeMasterCount > 0
+              ? ` ${largeMasterCount} master${largeMasterCount === 1 ? "" : "s"} exceed ${MAX_FILE_SIZE_LABEL} and will use Dropbox intake instead of a direct upload.`
+              : ""}
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
             <button
@@ -837,11 +1116,50 @@ export function BatchReview({
               onClick={openConfirm}
               className="border border-[var(--ink)] bg-[var(--ink)] px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--paper)] transition enabled:hover:bg-[var(--ink-soft)] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
             >
-              Submit Batch
+              {largeMasterCount > 0
+                ? "Prepare large-file intake"
+                : "Submit Batch"}
             </button>
           </div>
         </div>
       )}
+
+      {largeFilePanels.length > 0 ? (
+        <section
+          className="mt-8 space-y-4"
+          aria-labelledby="large-file-intake-heading"
+        >
+          <h2
+            id="large-file-intake-heading"
+            className="font-display text-xl text-[var(--ink)]"
+          >
+            Large master via Dropbox
+          </h2>
+          {largeFilePanels.map((panel) => (
+            <LargeMasterIntakePanel
+              key={panel.claimId}
+              inventoryId={panel.inventoryId}
+              title={panel.title}
+              folderName={panel.folderName}
+              masterFilename={panel.masterFilename}
+              folderWebUrl={panel.folderWebUrl}
+              status={panel.status}
+              message={panel.message}
+              byteLengthLabel={panel.byteLengthLabel}
+              dimensionsLabel={panel.dimensionsLabel}
+              checking={panel.checking}
+              processing={panel.processing}
+              canContinueProcessing={panel.canContinueProcessing}
+              onCheck={() => {
+                void checkLargeFilePanel(panel.claimId, panel.inventoryId);
+              }}
+              onContinue={() => {
+                void continueLargeFilePanel(panel.claimId, panel.inventoryId);
+              }}
+            />
+          ))}
+        </section>
+      ) : null}
 
       {submitError ? (
         <div
@@ -870,6 +1188,13 @@ export function BatchReview({
           >
             Confirm permanent submission
           </h2>
+          {largeMasterCount > 0 ? (
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              Files over {MAX_FILE_SIZE_LABEL} skip the direct Dropbox upload
+              link. This claims inventory IDs, creates reserved folders, and
+              waits for a manual Dropbox upload.
+            </p>
+          ) : null}
           <dl className="mt-4 space-y-2 text-sm">
             <div className="flex justify-between gap-4">
               <dt className="text-[var(--muted)]">Artworks</dt>
@@ -962,7 +1287,9 @@ export function BatchReview({
               }}
               className="border border-[var(--ink)] bg-[var(--ink)] px-6 py-3 text-sm uppercase tracking-[0.14em] text-[var(--paper)] transition enabled:hover:bg-[var(--ink-soft)] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Confirm and submit
+              {largeMasterCount > 0
+                ? "Confirm and prepare intake"
+                : "Confirm and submit"}
             </button>
           </div>
         </div>

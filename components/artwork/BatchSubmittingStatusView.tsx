@@ -50,7 +50,8 @@ export function BatchSubmittingStatusView({
         {artworkCount === 1 ? "" : "s"}
       </p>
       <p className="mt-2 text-[var(--muted)]">
-        Masters upload directly to Dropbox (up to 150 MB each). This may take
+        Masters upload directly to Dropbox (up to 150 MB each). Larger masters
+        wait for a Dropbox desktop or dropbox.com upload. This may take
         several minutes. Do not close this page.
       </p>
       <SubmittingStatusDots artworkCount={artworkCount} />

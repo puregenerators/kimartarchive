@@ -31,6 +31,11 @@ import {
   canReuseClaimStatus,
   expectedMasterDropboxPath,
 } from "@/lib/submission/upload-link-logic";
+import {
+  preferSafeFolderUrl,
+  requiresLargeFileDropboxIntake,
+} from "@/lib/submission/large-file-intake-logic";
+import { storePreparedLargeFileIntake } from "@/lib/submission/large-file-intake";
 import { inventoryAllocationMutex } from "@/lib/submission/mutex";
 import { runSubmissionPreflight } from "@/lib/submission/preflight";
 import type {
@@ -292,19 +297,64 @@ export async function prepareDirectIntake(params: {
 
     const ops = await getDropboxFilesOps();
     const masterAlreadyUploaded = await ops.pathExists(masterPath);
+    const largeMaster = requiresLargeFileDropboxIntake(file.byteLength);
+    let folderWebUrl: string | null = preferSafeFolderUrl({
+      folderName,
+    });
+    let claimStatus: "Claimed" | "Processing" =
+      claim.claimStatus === "Processing" ? "Processing" : "Claimed";
+
+    if (largeMaster) {
+      await storePreparedLargeFileIntake({
+        claimId: claim.claimId,
+        inventoryId: claim.inventoryId,
+        clientArtworkId: artwork.clientArtworkId,
+        submissionAttemptId: input.submissionAttemptId,
+        artwork: {
+          ...artwork,
+          title: metadata.title,
+          originalFilename: file.filename,
+        },
+        shared: {
+          exhibition: input.shared.exhibition,
+          gallery: input.shared.gallery,
+          exhibitionYear: input.shared.exhibitionYear,
+          photographer: input.shared.photographer,
+        },
+        originalFilename: file.filename,
+        declaredByteLength: file.byteLength,
+      });
+      const folderLink = await ops.createSharedLink(folderPath).catch(() => null);
+      folderWebUrl = preferSafeFolderUrl({
+        sharedUrl: folderLink?.url ?? null,
+        folderName,
+      });
+      if (claimStatus !== "Processing") {
+        await updateInventoryClaimStatus({
+          claimId: claim.claimId,
+          status: "Processing",
+          completedAt: "",
+          spreadsheetId: archive.sheetId,
+        });
+        claimStatus = "Processing";
+      }
+    }
 
     prepared.push({
       clientArtworkId: artwork.clientArtworkId,
       order: artwork.order,
       claimId: claim.claimId,
       inventoryId: claim.inventoryId,
-      claimStatus: claim.claimStatus === "Processing" ? "Processing" : "Claimed",
+      claimStatus,
       folderName,
       folderPath,
       masterFilename: planned.master,
       masterPath,
       masterAlreadyUploaded,
       reusedClaim: retryByArtwork.has(artwork.clientArtworkId),
+      requiresManualDropboxUpload: largeMaster,
+      folderWebUrl,
+      declaredByteLength: file.byteLength,
     });
   }
 

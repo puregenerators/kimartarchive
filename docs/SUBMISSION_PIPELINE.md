@@ -19,8 +19,11 @@ Production intake uses JSON routes. Master bytes never enter a Vercel Function b
 | Route | Body | Purpose |
 | --- | --- | --- |
 | `POST /api/artwork-batches/prepare` | JSON metadata + declared file sizes | Preflight, claim inventory IDs, reserve Dropbox folders |
-| `POST /api/artwork-batches/upload-link` | JSON path / type / size | Mint a short-lived Dropbox temporary upload link (`mode=add`) |
+| `POST /api/artwork-batches/upload-link` | JSON path / type / size | Mint a short-lived Dropbox temporary upload link (`mode=add`) for files ≤ 150 MB |
 | Browser | octets to the Dropbox link | Upload the master directly to Dropbox (≤ 150 MB) |
+| `POST /api/artwork-batches/check-master` | JSON claim ID + inventory ID | Verify the reserved large-file master exists (no client Dropbox path) |
+| `POST /api/artwork-batches/large-file/process` | JSON claim ID + inventory ID | Process a reserved large-file master after it is found |
+| `GET /api/artwork-batches/large-file` | — | List incomplete large-file intakes for authenticated resume |
 | `POST /api/artwork-batches/process` | JSON metadata + Dropbox path | Download master to `/tmp`, generate derivatives, upload, append Sheet |
 
 `POST /api/artwork-batches/submit` remains as a legacy multipart path for small local scripts. It is disabled on Vercel (`403`) so master bytes cannot pass through a function request body. The intake UI does not send master bytes there.
@@ -258,7 +261,7 @@ The intake UI uploads masters **directly to Dropbox**. Vercel Functions receive 
 | Duration | `maxDuration = 300` on the process route (Hobby maximum) | One large TIFF should finish; a 24-artwork batch is sequential and can still time out |
 | Memory | Hobby default **2 GB** (not configurable) | Measured Sharp RSS ~643 MB for a 56 MB / 20 MP TIFF is within this budget if derivatives encode sequentially from a file-backed download |
 
-A successful deploy still does not prove every archive TIFF will process. 16-bit or ~200 MP files can exceed 2 GB. Files over **150 MB** are rejected until Dropbox upload-session support exists.
+A successful deploy still does not prove every archive TIFF will process. 16-bit or ~200 MP files can exceed 2 GB. Files over **150 MB** cannot use Dropbox temporary upload links. Authenticated **large-file intake** claims an inventory ID, reserves the artwork folder, and waits for a Dropbox desktop or dropbox.com upload of the exact expected filename. Checking that file and continuing processing reuses the same claim. If pixel dimensions, bit depth, and estimated memory are unsafe for the 2 GB function, the app labels the artwork **Local processing required** instead of retrying the decode.
 
 API JSON routes still verify the access cookie themselves. Temporary upload links are path-bound and short-lived; Dropbox access and refresh tokens stay server-only.
 

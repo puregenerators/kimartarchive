@@ -4,11 +4,15 @@ export type DimensionUnit = (typeof DIMENSION_UNITS)[number];
 /** Local preview IDs begin here and increment by artwork order. */
 export const PREVIEW_INVENTORY_BASE = 1000;
 
-/** Production maximum per master until Dropbox upload-session support exists. */
+/** Direct-to-Dropbox temporary-upload-link cap. Larger masters use Dropbox intake. */
 export const MAX_FILE_BYTES = 150 * 1024 * 1024;
 
 /** Operator-facing label for {@link MAX_FILE_BYTES}. */
 export const MAX_FILE_SIZE_LABEL = "150 MB";
+
+export function requiresLargeFileDropboxIntake(byteLength: number): boolean {
+  return Number.isFinite(byteLength) && byteLength > MAX_FILE_BYTES;
+}
 
 /** Product hard cap for total source bytes in one batch. */
 export const MAX_BATCH_BYTES = 750 * 1024 * 1024;

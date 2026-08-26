@@ -343,7 +343,7 @@ Kim Artwork Archive/          ← archive root folder ID
 
 Batch upload creates one artwork draft per selected file. Users may add more images later; duplicates (same File object or matching name/size/lastModified) warn before adding.
 
-Previous “5 masters / 750 MB per single-artwork intake” limits are superseded by the one-image-per-artwork batch model. Per-file **150 MB** (Dropbox temporary-upload-link cap) and batch **750 MB** remain. Do not advertise 250 MB until upload-session support exists.
+Previous “5 masters / 750 MB per single-artwork intake” limits are superseded by the one-image-per-artwork batch model. Per-file **150 MB** remains the Dropbox temporary-upload-link cap. Masters over 150 MB are not rejected: they use authenticated large-file Dropbox intake (reserved folder + expected filename + Check for master). Do not advertise a higher direct-upload cap until upload-session support exists.
 
 These are **product** limits, not proof that Vercel can accept or process them in a single request.
 

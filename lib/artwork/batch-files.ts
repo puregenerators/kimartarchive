@@ -1,8 +1,8 @@
 import {
   MAX_ARTWORKS_PER_BATCH,
   MAX_BATCH_BYTES,
-  MAX_FILE_BYTES,
   createArtworkDraft,
+  requiresLargeFileDropboxIntake,
   type ArtworkDraft,
   type ArtworkImage,
   type BatchDraft,
@@ -69,7 +69,6 @@ export type DuplicateMatch = {
 
 export type AppendFilesRejection =
   | { code: "unsupported"; file: File; message: string }
-  | { code: "file_too_large"; file: File; message: string }
   | { code: "batch_too_large"; message: string }
   | { code: "batch_count"; message: string };
 
@@ -152,18 +151,16 @@ export function appendFilesToBatch(
 
     const evaluated = evaluateSingleImage(file);
     if (!evaluated.ok) {
-      const isSize =
-        file.size > MAX_FILE_BYTES &&
-        evaluated.error.toLowerCase().includes("limit");
       rejected.push({
-        code: isSize ? "file_too_large" : "unsupported",
+        code: "unsupported",
         file,
         message: evaluated.error,
       });
       continue;
     }
 
-    if (runningBytes + file.size > MAX_BATCH_BYTES) {
+    const largeMaster = requiresLargeFileDropboxIntake(file.size);
+    if (!largeMaster && runningBytes + file.size > MAX_BATCH_BYTES) {
       rejected.push({
         code: "batch_too_large",
         message: `Adding ${file.name} would exceed the ${formatFileSize(MAX_BATCH_BYTES)} batch limit.`,
@@ -184,7 +181,9 @@ export function appendFilesToBatch(
 
     added.push(draft);
     nextArtworks.push(draft);
-    runningBytes += file.size;
+    if (!largeMaster) {
+      runningBytes += file.size;
+    }
   }
 
   return {

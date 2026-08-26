@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { BatchImageUploader } from "@/components/artwork/BatchImageUploader";
+import { LargeMasterIntakePanel } from "@/components/artwork/LargeMasterIntakePanel";
 import {
   BatchSubmittingStatusView,
   submittingWaitLabel,
@@ -49,6 +50,10 @@ const tests: TestCase[] = [
         markup.includes("Masters upload directly to Dropbox (up to 150 MB each)."),
         "direct-upload copy",
       );
+      assert(
+        markup.includes("Larger masters"),
+        "large-file wait copy",
+      );
       assert(markup.includes("Do not close this page."), "do-not-close copy");
       assert(
         markup.includes(
@@ -65,6 +70,38 @@ const tests: TestCase[] = [
         <BatchImageUploader onFilesSelected={() => undefined} />,
       );
       assert(markup.includes("up to 150 MB per"), "150 MB limit");
+      assert(markup.includes("Larger masters stay in the batch"), "large-file copy");
+    },
+  },
+  {
+    name: "large-file intake panel shows reserved ID, filename, folder, and actions",
+    run: () => {
+      const markup = renderToStaticMarkup(
+        <LargeMasterIntakePanel
+          inventoryId={1401}
+          title="Blue Garden"
+          folderName="2026_KO_1401_BlueGarden"
+          masterFilename="2026_KO_1401_BlueGarden_master_01.tif"
+          folderWebUrl="https://www.dropbox.com/home/Apps/Kim%20Art%20Archive/2026_KO_1401_BlueGarden"
+          status="waiting_for_dropbox"
+          message="Upload the expected filename through Dropbox."
+          canContinueProcessing={false}
+          onCheck={() => undefined}
+          onContinue={() => undefined}
+        />,
+      );
+      assert(markup.includes("Inventory 1401"), "inventory ID");
+      assert(
+        markup.includes("2026_KO_1401_BlueGarden_master_01.tif"),
+        "expected filename",
+      );
+      assert(markup.includes("2026_KO_1401_BlueGarden"), "folder");
+      assert(markup.includes("Waiting for Dropbox upload"), "waiting status");
+      assert(markup.includes("Check for master"), "check action");
+      assert(markup.includes("Continue processing"), "continue action");
+      assert(markup.includes("Open destination folder on dropbox.com"), "web link");
+      assert(markup.includes("Dropbox desktop"), "desktop instructions");
+      assert(!markup.includes("sl."), "no token-looking text");
     },
   },
   {

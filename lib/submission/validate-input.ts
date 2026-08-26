@@ -8,6 +8,7 @@ import {
   MAX_BATCH_BYTES,
   MAX_FILE_BYTES,
   MAX_FILE_SIZE_LABEL,
+  requiresLargeFileDropboxIntake,
   type ArtworkDraft,
   type BatchDraft,
   type BatchSharedDetails,
@@ -49,6 +50,7 @@ function isPositiveNumber(value: string): boolean {
 function validateArtworkInput(
   artwork: ArtworkSubmissionInput,
   file: File | undefined,
+  options?: { allowOversizedMasters?: boolean },
 ): string | null {
   if (!artwork.clientArtworkId.trim()) {
     return "Each artwork requires a stable client ID.";
@@ -86,7 +88,7 @@ function validateArtworkInput(
   if (!isSupportedImageFile(file)) {
     return `Artwork “${label}”: Source must be TIFF, JPEG, or PNG.`;
   }
-  if (file.size > MAX_FILE_BYTES) {
+  if (file.size > MAX_FILE_BYTES && !options?.allowOversizedMasters) {
     return `Artwork “${label}”: Source file exceeds the ${MAX_FILE_SIZE_LABEL} limit.`;
   }
   return null;
@@ -111,6 +113,7 @@ export function validateSubmissionBatch(params: {
   shared: ArtworkBatchSubmissionInput["shared"];
   artworks: ArtworkSubmissionInput[];
   files: ServerArtworkFile[];
+  allowOversizedMasters?: boolean;
 }): ServerBatchValidationSuccess | ServerBatchValidationFailure {
   const attemptId = params.submissionAttemptId?.trim() ?? "";
   if (!attemptId || attemptId.length < 8) {
@@ -170,9 +173,13 @@ export function validateSubmissionBatch(params: {
   let totalBytes = 0;
   for (const artwork of params.artworks) {
     const file = filesByArtworkId.get(artwork.clientArtworkId)!;
-    const error = validateArtworkInput(artwork, file);
+    const error = validateArtworkInput(artwork, file, {
+      allowOversizedMasters: params.allowOversizedMasters,
+    });
     if (error) return { ok: false, message: error };
-    totalBytes += file.size;
+    if (!requiresLargeFileDropboxIntake(file.size)) {
+      totalBytes += file.size;
+    }
   }
 
   if (totalBytes > MAX_BATCH_BYTES) {
@@ -233,6 +240,7 @@ export function validateSubmissionBatchDeclared(params: {
     shared: params.shared,
     artworks: params.artworks,
     files,
+    allowOversizedMasters: true,
   });
   if (!validated.ok) return validated;
   const filesByArtworkId = new Map<string, DeclaredArtworkFileInput>();

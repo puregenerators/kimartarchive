@@ -55,6 +55,11 @@ export function mapSharpFormatToSupported(
 export type ValidateSourceOptions = {
   originalFilename: string;
   byteLength: number;
+  /**
+   * Override the default 150 MB source cap. Large-file Dropbox intake uses a
+   * higher cap only after the Vercel memory safety check.
+   */
+  maxSourceBytes?: number;
 };
 
 /**
@@ -76,10 +81,12 @@ export async function validateArtworkSourceImage(
     );
   }
 
-  if (options.byteLength > IMAGE_PROCESSING_CONFIG.maxSourceBytes) {
+  const maxSourceBytes =
+    options.maxSourceBytes ?? IMAGE_PROCESSING_CONFIG.maxSourceBytes;
+  if (options.byteLength > maxSourceBytes) {
     throw new ArtworkImageProcessingError(
       "FILE_TOO_LARGE",
-      `Source file exceeds the 150 MB limit (${formatBytes(options.byteLength)}).`,
+      `Source file exceeds the ${formatBytes(maxSourceBytes)} processing limit (${formatBytes(options.byteLength)}).`,
     );
   }
 
@@ -393,6 +400,8 @@ export type ProcessArtworkImageInput = {
   sourceByteLength?: number;
   originalFilename: string;
   plannedFilenames: PlannedFilenamesInput;
+  /** Override the default 150 MB source cap after a large-file safety check. */
+  maxSourceBytes?: number;
 };
 
 function resolveArtworkImageSource(
@@ -461,6 +470,7 @@ async function processArtworkImageInner(
     {
       originalFilename: input.originalFilename,
       byteLength,
+      maxSourceBytes: input.maxSourceBytes,
     },
   );
 

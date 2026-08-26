@@ -9,8 +9,10 @@ import { MediumField } from "@/components/artwork/MediumField";
 import { replaceArtworkImage } from "@/lib/artwork/batch-files";
 import {
   DIMENSION_UNITS,
+  MAX_FILE_SIZE_LABEL,
   formatArtworkNumber,
   previewInventoryIdForIndex,
+  requiresLargeFileDropboxIntake,
   type ArtworkDraft,
   type ArtworkImage,
   type ArtworkOverrideFields,
@@ -232,6 +234,11 @@ export function ArtworkCard({
                 {describeImageType(artwork.image.file)} ·{" "}
                 {formatFileSize(artwork.image.file.size)}
               </p>
+              {requiresLargeFileDropboxIntake(artwork.image.file.size) ? (
+                <p className="text-[11px] text-[var(--ink)]">
+                  Over {MAX_FILE_SIZE_LABEL} — large master via Dropbox
+                </p>
+              ) : null}
               <ArtworkImageThumbFooterNote
                 image={artwork.image}
                 tiffPreview={tiffPreview}

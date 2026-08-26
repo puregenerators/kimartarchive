@@ -54,6 +54,13 @@ import type {
 } from "@/lib/submission/types";
 import { emptyCleanupResult } from "@/lib/submission/types";
 import { canReuseClaimStatus } from "@/lib/submission/upload-link-logic";
+import {
+  bytesPerSampleFromSharpDepth,
+  estimateProcessingMemory,
+  localProcessingRequiredReason,
+  VERCEL_SAFE_DOWNLOAD_BYTES,
+} from "@/lib/submission/large-file-intake-logic";
+import { validateArtworkSourceImage } from "@/lib/images/process-artwork-image";
 import type { StorageProvider } from "@/lib/storage/types";
 
 function mapProcessingError(error: unknown): {
@@ -149,9 +156,10 @@ export type ProcessFromDropboxParams = {
   };
   claimId: string;
   inventoryId: number;
-  dropboxPath: string;
+  dropboxPath?: string;
   spreadsheetId: string;
   storage: StorageProvider;
+  allowOversizedMaster?: boolean;
 };
 
 export async function processArtworkFromDropbox(
@@ -161,10 +169,52 @@ export async function processArtworkFromDropbox(
   const intakeStartedMs = Date.now();
   const timings = emptyIntakeTimings();
   const metadata = resolveArtworkMetadata(params.artwork, params.shared);
+  const folderName = buildArtworkFolderName({
+    year: metadata.year,
+    inventoryId: params.inventoryId,
+    title: metadata.title,
+  });
+  const planned = planFilenamesForArtwork({
+    year: metadata.year,
+    inventoryId: params.inventoryId,
+    title: metadata.title,
+    masterFilename: params.artwork.originalFilename,
+  });
+  const folderPath = `/${folderName}`;
+  const expectedMasterPath = `${folderPath}/${planned.master}`;
   const cleanup = emptyCleanupResult();
   const warnings: ReconciliationWarning[] = [];
   const tempDir = join(tmpdir(), `kimartarchive-process-${crypto.randomUUID()}`);
   await mkdir(tempDir, { recursive: true, mode: 0o700 });
+
+  if (params.dropboxPath && params.dropboxPath !== expectedMasterPath) {
+    cleanup.tempFilesRemoved = await removeTempDir(tempDir);
+    return {
+      ok: false,
+      clientArtworkId: params.artwork.clientArtworkId,
+      order: params.artwork.order,
+      title: metadata.title,
+      inventoryId: params.inventoryId,
+      claimId: params.claimId,
+      stage: "failed",
+      lastCompletedStage: "claimed",
+      failedOperation: "upload_master",
+      driveFolder: null,
+      master: null,
+      hr: null,
+      web: null,
+      thumb: null,
+      metadata: null,
+      sheetRowWritten: false,
+      claimStatus: "Processing",
+      cleanup,
+      startedAt,
+      finishedAt: isoNow(),
+      reconciliationWarnings: [],
+      errorCode: "INVALID_BATCH",
+      message: "Dropbox master path does not match the reserved artwork folder.",
+    };
+  }
 
   let driveFolder: DriveResourceRef | null = null;
   let master: DriveResourceRef | null = null;
@@ -294,7 +344,7 @@ export async function processArtworkFromDropbox(
       inventoryId: params.inventoryId,
       claimId: params.claimId,
       driveFolder: driveFolder!,
-      master: master ?? { id: params.dropboxPath, name: "", webViewLink: "" },
+      master: master ?? { id: expectedMasterPath, name: "", webViewLink: "" },
       hr: hr ?? { id: "", name: "", webViewLink: "" },
       web: web ?? { id: "", name: "", webViewLink: "" },
       thumb: thumb ?? { id: "", name: "", webViewLink: "" },
@@ -329,18 +379,6 @@ export async function processArtworkFromDropbox(
   }
   lastCompletedStage = "processing";
 
-  const folderName = buildArtworkFolderName({
-    year: metadata.year,
-    inventoryId: params.inventoryId,
-    title: metadata.title,
-  });
-  const planned = planFilenamesForArtwork({
-    year: metadata.year,
-    inventoryId: params.inventoryId,
-    title: metadata.title,
-    masterFilename: params.artwork.originalFilename,
-  });
-  const folderPath = `/${folderName}`;
   const ops = await getDropboxFilesOps();
   const folderLink = await ops.createSharedLink(folderPath).catch(() => null);
   driveFolder = {
@@ -349,15 +387,7 @@ export async function processArtworkFromDropbox(
     webViewLink: folderLink?.url ?? params.storage.getArchiveRootUrl() ?? "",
   };
 
-  if (params.dropboxPath !== `${folderPath}/${planned.master}`) {
-    return failKeepProcessing(
-      "INVALID_BATCH",
-      "Dropbox master path does not match the reserved artwork folder.",
-      "upload_master",
-    );
-  }
-
-  const masterMeta = await ops.getMetadata(params.dropboxPath).catch(() => null);
+  const masterMeta = await ops.getMetadata(expectedMasterPath).catch(() => null);
   if (!masterMeta || masterMeta.isFolder || masterMeta.size <= 0) {
     return failKeepProcessing(
       "MISSING_FILE",
@@ -367,9 +397,9 @@ export async function processArtworkFromDropbox(
   }
   lastCompletedStage = "folder_created";
 
-  const masterLink = await ops.createSharedLink(params.dropboxPath);
+  const masterLink = await ops.createSharedLink(expectedMasterPath);
   master = {
-    id: params.dropboxPath,
+    id: expectedMasterPath,
     name: planned.master,
     webViewLink: masterLink.url,
   };
@@ -377,8 +407,25 @@ export async function processArtworkFromDropbox(
 
   const localMasterPath = join(tempDir, planned.master);
   try {
+    if (masterMeta.size > VERCEL_SAFE_DOWNLOAD_BYTES) {
+      return failKeepProcessing(
+        "LOCAL_PROCESSING_REQUIRED",
+        localProcessingRequiredReason({
+          width: 0,
+          height: 0,
+          channels: 3,
+          bytesPerSample: 1,
+          sourceByteLength: masterMeta.size,
+          decodedBytes: 0,
+          estimatedPeakBytes: masterMeta.size,
+          safeToProcessOnVercel: false,
+        }),
+        "generate_derivatives",
+      );
+    }
+
     const downloaded = await ops.downloadFileToPath(
-      params.dropboxPath,
+      expectedMasterPath,
       localMasterPath,
     );
     const info = await stat(localMasterPath);
@@ -387,6 +434,28 @@ export async function processArtworkFromDropbox(
         "MISSING_FILE",
         "Downloaded master file is empty.",
         "upload_master",
+      );
+    }
+
+    const sourceCheck = await validateArtworkSourceImage(localMasterPath, {
+      originalFilename: params.artwork.originalFilename,
+      byteLength: info.size,
+      maxSourceBytes: params.allowOversizedMaster
+        ? VERCEL_SAFE_DOWNLOAD_BYTES
+        : undefined,
+    });
+    const estimate = estimateProcessingMemory({
+      width: sourceCheck.metadata.width ?? 0,
+      height: sourceCheck.metadata.height ?? 0,
+      channels: sourceCheck.metadata.channels ?? 3,
+      bytesPerSample: bytesPerSampleFromSharpDepth(sourceCheck.metadata.depth),
+      sourceByteLength: info.size,
+    });
+    if (params.allowOversizedMaster && !estimate.safeToProcessOnVercel) {
+      return failKeepProcessing(
+        "LOCAL_PROCESSING_REQUIRED",
+        localProcessingRequiredReason(estimate),
+        "generate_derivatives",
       );
     }
 
@@ -400,6 +469,9 @@ export async function processArtworkFromDropbox(
         web: planned.web,
         thumb: planned.thumb,
       },
+      maxSourceBytes: params.allowOversizedMaster
+        ? VERCEL_SAFE_DOWNLOAD_BYTES
+        : undefined,
     });
     timings.masterReadDecodeMs = processed.timings.masterReadDecodeMs;
     timings.hrGenerationMs = processed.timings.hrGenerationMs;

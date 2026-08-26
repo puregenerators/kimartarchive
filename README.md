@@ -21,7 +21,7 @@ The app is not a database. Successful intake writes a Sheet row; `/artworks` rea
 
 The app is private. `APP_ACCESS_PASSWORD` must be set; production fails closed if it is missing. After login, a secure HTTP-only cookie remembers access. Pages, APIs, and server actions all verify that session independently.
 
-Large TIFF intake uploads masters **directly to Dropbox** (150 MB maximum per file). See `docs/SUBMISSION_PIPELINE.md`.
+Large TIFF intake uploads masters **directly to Dropbox** (150 MB maximum per temporary upload link). Larger masters use authenticated **large-file intake**: the app claims an inventory ID, reserves the folder, and waits for a Dropbox desktop or dropbox.com upload. See `docs/SUBMISSION_PIPELINE.md`.
 
 ## Docs
 

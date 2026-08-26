@@ -109,8 +109,12 @@ export function BatchImageUploader({
                 the {formatFileSize(MAX_BATCH_BYTES)} total source-size limit
               </li>
               <li>
-                TIFF, JPEG, or PNG · up to {MAX_FILE_SIZE_LABEL} per
-                file
+                TIFF, JPEG, or PNG · direct upload up to {MAX_FILE_SIZE_LABEL}{" "}
+                per file
+              </li>
+              <li>
+                Larger masters stay in the batch and use Dropbox intake after
+                review
               </li>
               <li>Files stay on this device until you submit later</li>
               {atCapacity ? (

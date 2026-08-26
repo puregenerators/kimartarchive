@@ -16,4 +16,9 @@ export type PreparedArtwork = {
   masterPath: string;
   masterAlreadyUploaded: boolean;
   reusedClaim: boolean;
+  /** True when the master exceeds the Dropbox temporary-upload-link cap. */
+  requiresManualDropboxUpload: boolean;
+  /** Signed-in Dropbox web URL for the reserved folder; never a token or temp link. */
+  folderWebUrl: string | null;
+  declaredByteLength: number;
 };

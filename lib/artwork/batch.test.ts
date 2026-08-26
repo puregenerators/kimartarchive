@@ -435,16 +435,20 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "per-file size validation rejects oversized files",
+    name: "oversized files are kept for large-file Dropbox intake",
     run: () => {
       const result = appendFilesToBatch(
         createEmptyBatch(),
         [makeFile("Huge.jpg", { size: MAX_FILE_BYTES + 1 })],
         { createPreviewUrls: false },
       );
-      assertEqual(result.added.length, 0, "not added");
-      assertEqual(result.rejected.length, 1, "rejected");
-      assertEqual(result.rejected[0]!.code, "file_too_large", "size code");
+      assertEqual(result.added.length, 1, "added");
+      assertEqual(result.rejected.length, 0, "not rejected");
+      assertEqual(
+        result.added[0]!.image?.file.name,
+        "Huge.jpg",
+        "same file",
+      );
     },
   },
   {

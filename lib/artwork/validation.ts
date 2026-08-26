@@ -4,18 +4,20 @@ import {
   DIMENSION_UNITS,
   MAX_ARTWORKS_PER_BATCH,
   MAX_BATCH_BYTES,
-  MAX_FILE_BYTES,
   MAX_FILE_SIZE_LABEL,
   formatArtworkNumber,
+  requiresLargeFileDropboxIntake,
   type ArtworkDraft,
   type ArtworkValidationErrors,
   type BatchDraft,
   type BatchValidationResult,
 } from "@/lib/artwork/types";
 
-function totalBatchBytes(artworks: readonly ArtworkDraft[]): number {
+function totalDirectUploadBytes(artworks: readonly ArtworkDraft[]): number {
   return artworks.reduce((sum, artwork) => {
-    return sum + (artwork.image?.file.size ?? 0);
+    const size = artwork.image?.file.size ?? 0;
+    if (requiresLargeFileDropboxIntake(size)) return sum;
+    return sum + size;
   }, 0);
 }
 
@@ -91,13 +93,6 @@ export function evaluateSingleImage(file: File | undefined): SingleImageResult {
     };
   }
 
-  if (file.size > MAX_FILE_BYTES) {
-    return {
-      ok: false,
-      error: `${file.name} exceeds the ${MAX_FILE_SIZE_LABEL} per-file limit (${formatFileSize(file.size)}).`,
-    };
-  }
-
   return { ok: true, file };
 }
 
@@ -139,8 +134,6 @@ export function validateArtworkDraft(
     errors.image = "Add exactly one master image (TIFF, JPEG, or PNG).";
   } else if (!isSupportedImageFile(artwork.image.file)) {
     errors.image = `Unsupported file: ${artwork.image.file.name}.`;
-  } else if (artwork.image.file.size > MAX_FILE_BYTES) {
-    errors.image = `${artwork.image.file.name} exceeds the ${MAX_FILE_SIZE_LABEL} limit.`;
   }
 
   return errors;
@@ -182,10 +175,10 @@ export function validateBatch(batch: BatchDraft): BatchValidationResult {
     };
   }
 
-  const totalBytes = totalBatchBytes(batch.artworks);
+  const totalBytes = totalDirectUploadBytes(batch.artworks);
   if (totalBytes > MAX_BATCH_BYTES) {
     return {
-      form: `Total batch size ${formatFileSize(totalBytes)} exceeds the ${formatFileSize(MAX_BATCH_BYTES)} limit.`,
+      form: `Total direct-upload size ${formatFileSize(totalBytes)} exceeds the ${formatFileSize(MAX_BATCH_BYTES)} limit. Files over ${MAX_FILE_SIZE_LABEL} use Dropbox intake and do not count toward this cap.`,
       artworks,
     };
   }
