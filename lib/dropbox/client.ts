@@ -543,7 +543,7 @@ export async function getDropboxClient(
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              commit: {
+              commit_info: {
                 path: params.path,
                 mode: "add",
                 autorename: false,

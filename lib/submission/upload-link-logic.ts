@@ -72,11 +72,11 @@ export type MintTemporaryUploadLinkCommit = {
 };
 
 export function buildTemporaryUploadLinkPayload(path: string): {
-  commit: MintTemporaryUploadLinkCommit;
+  commit_info: MintTemporaryUploadLinkCommit;
   duration: number;
 } {
   return {
-    commit: {
+    commit_info: {
       path,
       mode: "add",
       autorename: false,

@@ -177,9 +177,9 @@ const tests: TestCase[] = [
       const payload = buildTemporaryUploadLinkPayload(
         "/2026_KO_1401_BlueGarden/2026_KO_1401_BlueGarden_master_01.tif",
       );
-      assertEqual(payload.commit.mode, "add", "mode");
-      assertEqual(payload.commit.autorename, false, "autorename");
-      assertEqual(payload.commit.strict_conflict, true, "strict conflict");
+      assertEqual(payload.commit_info.mode, "add", "mode");
+      assertEqual(payload.commit_info.autorename, false, "autorename");
+      assertEqual(payload.commit_info.strict_conflict, true, "strict conflict");
       assertEqual(payload.duration, 900, "ttl");
       const parsed = parseTemporaryUploadLinkResponse({
         link: "https://content.dropboxapi.com/apitul/1/example",

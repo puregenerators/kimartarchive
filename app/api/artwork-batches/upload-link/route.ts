@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 
 import { unauthorizedApiResponse } from "@/lib/auth/access";
+import { DropboxIntegrationError } from "@/lib/dropbox/errors";
 import { mintDirectUploadLink } from "@/lib/submission/mint-upload-link";
 
 export const runtime = "nodejs";
@@ -41,10 +42,14 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         ok: false,
-        code: "UNKNOWN",
-        message: "Could not create a Dropbox upload link.",
+        code:
+          error instanceof DropboxIntegrationError ? error.code : "UNKNOWN",
+        message:
+          error instanceof DropboxIntegrationError
+            ? error.safeMessage
+            : "Could not create a Dropbox upload link.",
       },
-      { status: 500 },
+      { status: error instanceof DropboxIntegrationError ? 502 : 500 },
     );
   }
 }
