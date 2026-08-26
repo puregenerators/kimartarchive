@@ -16,8 +16,6 @@ import {
   assertSafePlannedFilename,
   isSafePlannedFilename,
 } from "@/lib/images/filename-safety";
-import { processArtworkImage } from "@/lib/images/process-artwork-image";
-import { storeTempProcessingOutputs } from "@/lib/images/temp-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -164,6 +162,12 @@ export async function POST(request: Request) {
 
     const sourceBytes = Buffer.from(await fileEntry.arrayBuffer());
 
+    const { processArtworkImage } = await import(
+      "@/lib/images/process-artwork-image"
+    );
+    const { storeTempProcessingOutputs } = await import(
+      "@/lib/images/temp-store"
+    );
     const processed = await processArtworkImage({
       sourceBytes,
       originalFilename,

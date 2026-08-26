@@ -11,7 +11,6 @@
 import { NextResponse } from "next/server";
 
 import { unauthorizedApiResponse } from "@/lib/auth/access";
-import { submitArtworkBatch } from "@/lib/submission/submit-batch";
 import type {
   ArtworkBatchSubmissionInput,
   ArtworkSubmissionInput,
@@ -147,6 +146,7 @@ export async function POST(request: Request) {
       }
     }
 
+    const { submitArtworkBatch } = await import("@/lib/submission/submit-batch");
     const result = await submitArtworkBatch({
       submissionAttemptId,
       shared,

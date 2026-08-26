@@ -29,11 +29,13 @@ export default async function LoginPage({
     redirect(nextPath);
   }
 
+  const configured = Boolean(readAppAccessPassword());
+
   return (
     <LoginForm
-      configured={Boolean(readAppAccessPassword())}
+      configured={configured}
       nextPath={nextPath}
-      unconfiguredMessage={authNotConfiguredMessage()}
+      unconfiguredMessage={configured ? "" : authNotConfiguredMessage()}
     />
   );
 }

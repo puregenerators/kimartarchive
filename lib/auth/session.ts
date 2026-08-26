@@ -44,8 +44,8 @@ export function authNotConfiguredMessage(
   env: AppAccessEnv = process.env,
 ): string {
   return isProductionNodeEnv(env)
-    ? "This archive is not available because APP_ACCESS_PASSWORD is not configured."
-    : "APP_ACCESS_PASSWORD is not set. Add it to .env.local to enable access.";
+    ? "This archive is not available because access is not configured."
+    : "Access is not configured. Set the shared app password in .env.local.";
 }
 
 export function secretsEqual(left: string, right: string): boolean {

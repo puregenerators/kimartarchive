@@ -52,7 +52,7 @@ const tests: TestCase[] = [
     name: "missing production password fails closed without a form",
     run: () => {
       const message =
-        "This archive is not available because APP_ACCESS_PASSWORD is not configured.";
+        "This archive is not available because access is not configured.";
       const markup = renderToStaticMarkup(
         <LoginView
           configured={false}

@@ -13,8 +13,6 @@ import {
   ArtworkImageProcessingError,
   toClientErrorPayload,
 } from "@/lib/images/errors";
-import { generateUiPreviewJpeg } from "@/lib/images/preview";
-import { storeTempPreviewOutput } from "@/lib/images/temp-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -93,6 +91,8 @@ export async function POST(request: Request) {
       "upload.bin";
 
     const sourceBytes = Buffer.from(await fileEntry.arrayBuffer());
+    const { generateUiPreviewJpeg } = await import("@/lib/images/preview");
+    const { storeTempPreviewOutput } = await import("@/lib/images/temp-store");
     const preview = await generateUiPreviewJpeg(sourceBytes, originalFilename);
 
     const stored = await storeTempPreviewOutput({
