@@ -1,4 +1,5 @@
 import { NewArtworkBatchForm } from "@/components/artwork/NewArtworkBatchForm";
+import { requireAuthenticatedPage } from "@/lib/auth/access";
 import { getArchiveTargetDiagnostics } from "@/lib/submission/archive-target";
 
 export const metadata = {
@@ -7,7 +8,8 @@ export const metadata = {
     "Prepare a batch of artworks from the same exhibition or documentation session.",
 };
 
-export default function NewArtworkPage() {
+export default async function NewArtworkPage() {
+  await requireAuthenticatedPage();
   const archiveTarget = getArchiveTargetDiagnostics();
 
   return (

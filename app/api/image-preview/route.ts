@@ -7,6 +7,7 @@
 
 import { NextResponse } from "next/server";
 
+import { unauthorizedApiResponse } from "@/lib/auth/access";
 import { IMAGE_PROCESSING_CONFIG } from "@/lib/images/config";
 import {
   ArtworkImageProcessingError,
@@ -35,6 +36,9 @@ function jsonError(
 }
 
 export async function POST(request: Request) {
+  const denied = await unauthorizedApiResponse();
+  if (denied) return denied;
+
   let artworkId: string | null = null;
 
   try {

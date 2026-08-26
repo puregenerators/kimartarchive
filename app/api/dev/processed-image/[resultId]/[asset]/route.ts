@@ -1,10 +1,11 @@
 /**
- * DEVELOPMENT ONLY — serve temporary HR/web derivatives by opaque result ID.
+ * Authenticated serving of temporary HR/web derivatives by opaque result ID.
  * No directory listing. Expired results return 404.
  */
 
 import { NextResponse } from "next/server";
 
+import { unauthorizedApiResponse } from "@/lib/auth/access";
 import { getTempAsset, type TempAssetKind } from "@/lib/images/temp-store";
 
 export const runtime = "nodejs";
@@ -18,9 +19,12 @@ type RouteContext = {
 };
 
 export async function GET(request: Request, context: RouteContext) {
+  const denied = await unauthorizedApiResponse();
+  if (denied) return denied;
+
   const { resultId, asset: assetParam } = await context.params;
 
-  if (assetParam !== "hr" && assetParam !== "web") {
+  if (assetParam !== "hr" && assetParam !== "web" && assetParam !== "thumb") {
     return NextResponse.json(
       { ok: false, error: { code: "INVALID_REQUEST", message: "Unknown asset." } },
       { status: 404 },

@@ -10,6 +10,8 @@ import {
 } from "./env";
 import {
   ARTWORK_INVENTORY_HEADERS,
+  ARTWORK_INVENTORY_HEADERS_BEFORE_THUMBNAIL,
+  artworkInventoryColumnIndex,
   compareHeaders,
   isBlankHeaderRow,
 } from "./headers";
@@ -20,9 +22,16 @@ import {
   findValuesInLocationColumn,
   findValuesInRemovedInventoryColumns,
   planArtworkInventoryHeaderMigration,
+  planArtworkInventoryThumbnailColumnInsert,
   projectInventoryRowDroppingLocation,
   projectLegacyInventoryRowToCurrent,
 } from "./inventory-header-migration";
+import {
+  buildSheetsImageFormula,
+  isSheetsImageFormula,
+  parseAppendedRowNumber,
+  SHEETS_IMAGE_FIT_CELL_MODE,
+} from "./inventory-thumbnail";
 import {
   buildChildFolderQuery,
   escapeDriveQueryValue,
@@ -288,13 +297,14 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "Artwork Inventory schema is 21 columns without Location",
+    name: "Artwork Inventory schema is 22 columns with Thumbnail after Inventory ID",
     run: () => {
-      assertEqual(ARTWORK_INVENTORY_HEADERS.length, 21, "column count");
+      assertEqual(ARTWORK_INVENTORY_HEADERS.length, 22, "column count");
       assertDeepEqual(
         [...ARTWORK_INVENTORY_HEADERS],
         [
           "Inventory ID",
+          "Thumbnail",
           "Title",
           "Year",
           "Medium",
@@ -318,15 +328,32 @@ const tests: TestCase[] = [
         ],
         "exact header order",
       );
+      assertEqual(artworkInventoryColumnIndex("Thumbnail"), 1, "Thumbnail index");
+      assertEqual(artworkInventoryColumnIndex("Title"), 2, "Title after Thumbnail");
       assertEqual(
         ARTWORK_INVENTORY_HEADERS.includes("Location" as never),
         false,
         "no Location",
       );
       assertEqual(
+        ARTWORK_INVENTORY_HEADERS.includes("Thumbnail Filename" as never),
+        false,
+        "no Thumbnail Filename",
+      );
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS.includes("Thumbnail URL" as never),
+        false,
+        "no Thumbnail URL",
+      );
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS_BEFORE_THUMBNAIL.length,
+        21,
+        "pre-thumbnail count",
+      );
+      assertEqual(
         ARTWORK_INVENTORY_HEADERS_WITH_LOCATION.length,
         22,
-        "pre-migration count",
+        "pre-location-removal count",
       );
       assertEqual(
         ARTWORK_INVENTORY_HEADERS_WITH_LOCATION[LOCATION_COLUMN_INDEX],
@@ -356,12 +383,12 @@ const tests: TestCase[] = [
       );
       assertDeepEqual(
         [...plan.expectedAfter],
-        [...ARTWORK_INVENTORY_HEADERS],
+        [...ARTWORK_INVENTORY_HEADERS_BEFORE_THUMBNAIL],
         "expected after",
       );
 
       const already = planArtworkInventoryHeaderMigration({
-        headerRow: [...ARTWORK_INVENTORY_HEADERS],
+        headerRow: [...ARTWORK_INVENTORY_HEADERS_BEFORE_THUMBNAIL],
       });
       assertEqual(already.ok, true, "already ok");
       if (!already.ok) return;
@@ -474,6 +501,48 @@ const tests: TestCase[] = [
       const fromLegacy = projectLegacyInventoryRowToCurrent(legacy);
       assertDeepEqual(fromLegacy, projected, "legacy projects to same result");
       assertEqual(findValuesInRemovedInventoryColumns([legacy]).length, 0, "blank");
+    },
+  },
+  {
+    name: "Thumbnail column insert plans a shift after Inventory ID",
+    run: () => {
+      const needed = planArtworkInventoryThumbnailColumnInsert({
+        headerRow: [...ARTWORK_INVENTORY_HEADERS_BEFORE_THUMBNAIL],
+      });
+      assertEqual(needed.ok, true, "plan ok");
+      if (!needed.ok) return;
+      assertEqual(needed.alreadyMigrated, false, "needs insert");
+      assertEqual(needed.insertColumnIndex, 1, "after Inventory ID");
+      assertDeepEqual(
+        [...needed.expectedAfter],
+        [...ARTWORK_INVENTORY_HEADERS],
+        "expected after insert",
+      );
+
+      const already = planArtworkInventoryThumbnailColumnInsert({
+        headerRow: [...ARTWORK_INVENTORY_HEADERS],
+      });
+      assertEqual(already.ok, true, "already ok");
+      if (!already.ok) return;
+      assertEqual(already.alreadyMigrated, true, "already inserted");
+    },
+  },
+  {
+    name: "IMAGE formula preserves aspect ratio and embeds the direct URL",
+    run: () => {
+      const url =
+        "https://dl.dropboxusercontent.com/scl/fi/abc/file.jpg?rlkey=keepme&raw=1";
+      const formula = buildSheetsImageFormula(url);
+      assertEqual(
+        formula,
+        `=IMAGE("${url}", ${SHEETS_IMAGE_FIT_CELL_MODE})`,
+        "IMAGE mode 1",
+      );
+      assertEqual(isSheetsImageFormula(formula), true, "detects formula");
+      assertEqual(isSheetsImageFormula("https://example.com"), false, "not a formula");
+      assertEqual(parseAppendedRowNumber("'Artwork Inventory'!A12:V12"), 12, "row");
+      assertEqual(parseAppendedRowNumber("Artwork Inventory!B8"), 8, "single cell");
+      assertEqual(parseAppendedRowNumber(null), null, "missing range");
     },
   },
   {

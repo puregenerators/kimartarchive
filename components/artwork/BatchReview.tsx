@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { BatchSubmissionReport } from "@/components/artwork/BatchSubmissionReport";
+import { BatchSubmittingStatusView } from "@/components/artwork/BatchSubmittingStatusView";
 import { FilenameDisplay } from "@/components/artwork/FilenameDisplay";
 import {
   ArtworkImageThumb,
@@ -16,6 +17,7 @@ import {
   type ArtworkDraft,
   type BatchSharedDetails,
 } from "@/lib/artwork/types";
+import { resolveArtworkTitle } from "@/lib/artwork/untitled";
 import {
   describeImageType,
   formatDimensions,
@@ -64,7 +66,7 @@ function isFreshSuccess(
 ): boolean {
   if (processing.status !== "success" || !artwork.image) return false;
   return !isProcessingResultStale(processing.fingerprint, {
-    title: artwork.title,
+    title: resolveArtworkTitle(artwork),
     year: artwork.year,
     previewInventoryId: previewInventoryIdForIndex(index),
     imageName: artwork.image.file.name,
@@ -135,18 +137,19 @@ function ReviewArtworkCard({
   locked: boolean;
 }) {
   const previewId = previewInventoryIdForIndex(index);
+  const archivedTitle = resolveArtworkTitle(artwork);
   const plan = artwork.image
     ? planFilenamesForArtwork({
         year: artwork.year.trim(),
         inventoryId: previewId,
-        title: artwork.title,
+        title: archivedTitle,
         masterFilename: artwork.image.file.name,
       })
     : null;
 
   const fingerprintInput = artwork.image
     ? {
-        title: artwork.title,
+        title: archivedTitle,
         year: artwork.year,
         previewInventoryId: previewId,
         imageName: artwork.image.file.name,
@@ -176,12 +179,13 @@ function ReviewArtworkCard({
       body.set("file", artwork.image.file);
       body.set("artworkId", artwork.id);
       body.set("originalFilename", artwork.image.file.name);
-      body.set("title", artwork.title);
+      body.set("title", archivedTitle);
       body.set("year", artwork.year.trim());
       body.set("inventoryId", String(previewId));
       body.set("masterFilename", plan.master);
       body.set("hrFilename", plan.hr);
       body.set("webFilename", plan.web);
+      body.set("thumbFilename", plan.thumb);
 
       const response = await fetch("/api/dev/process-artwork-image", {
         method: "POST",
@@ -216,6 +220,7 @@ function ReviewArtworkCard({
         master: data.master,
         hr: data.hr,
         web: data.web,
+        thumb: data.thumb,
         comparisons: data.comparisons,
       });
     } catch {
@@ -300,9 +305,10 @@ function ReviewArtworkCard({
             {previewId}
           </p>
           <h3 className="mt-1 font-display text-2xl text-[var(--ink)]">
-            {artwork.title}
+            {archivedTitle}
           </h3>
           <dl className="mt-3">
+            <MetaRow label="Title" value={archivedTitle} />
             <MetaRow label="Year" value={artwork.year} />
             <MetaRow label="Medium" value={artwork.medium} />
             <MetaRow label="Dimensions" value={formatDimensions(artwork)} />
@@ -332,6 +338,12 @@ function ReviewArtworkCard({
                 </li>
                 <li>
                   <FilenameDisplay filename={plan.web} label="planned web JPG" />
+                </li>
+                <li>
+                  <FilenameDisplay
+                    filename={plan.thumb}
+                    label="planned thumbnail JPG"
+                  />
                 </li>
               </ul>
             </div>
@@ -380,6 +392,26 @@ function ReviewArtworkCard({
         </div>
       </div>
     </article>
+  );
+}
+
+function SharedMetaRows({ shared }: { shared: BatchSharedDetails }) {
+  return (
+    <>
+      <MetaRow label="Exhibition" value={shared.exhibition} />
+      <MetaRow label="Gallery / Venue" value={shared.gallery} />
+      <MetaRow label="Exhibition year" value={shared.exhibitionYear} />
+      <MetaRow label="Photographer" value={shared.photographer} />
+    </>
+  );
+}
+
+function sharedHasValues(shared: BatchSharedDetails): boolean {
+  return (
+    shared.exhibition.trim() !== "" ||
+    shared.gallery.trim() !== "" ||
+    shared.exhibitionYear.trim() !== "" ||
+    shared.photographer.trim() !== ""
   );
 }
 
@@ -509,7 +541,7 @@ export function BatchReview({
     <div className="animate-fade-in">
       <header className="max-w-2xl">
         <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
-          Kim Artwork Archive
+          Kim&apos;s Artwork Archive
         </p>
         <h1 className="mt-3 font-display text-4xl tracking-tight text-[var(--ink)] sm:text-5xl">
           Review batch
@@ -536,29 +568,21 @@ export function BatchReview({
       ) : null}
 
       {submitting ? (
-        <div
-          role="status"
-          aria-live="polite"
-          className="mt-8 border border-[var(--accent)] bg-[var(--accent-soft)] px-4 py-5 text-sm text-[var(--ink)]"
+        <BatchSubmittingStatusView
+          artworkCount={artworks.length}
+          elapsedSec={elapsedSec}
         >
-          <p className="font-medium">
-            Submitting {artworks.length} artwork
-            {artworks.length === 1 ? "" : "s"}
-          </p>
-          <p className="mt-2 text-[var(--muted)]">
-            This may take several minutes. Large TIFFs take time. Do not close
-            this page. Editing and duplicate submission are disabled.
-          </p>
-          <div
-            className="mt-4 h-2 w-full overflow-hidden bg-[var(--surface-muted)]"
-            aria-hidden
-          >
-            <div className="h-full w-1/3 animate-pulse bg-[var(--accent)]" />
-          </div>
-          <p className="mt-3 text-xs text-[var(--muted)]">
-            Elapsed {elapsedSec}s · exact per-artwork stage is not streamed live
-          </p>
-        </div>
+          {sharedHasValues(shared) ? (
+            <div className="mt-4 border-t border-[var(--accent)] pt-3">
+              <p className="text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
+                Shared details
+              </p>
+              <dl>
+                <SharedMetaRows shared={shared} />
+              </dl>
+            </div>
+          ) : null}
+        </BatchSubmittingStatusView>
       ) : (
         <div
           role="status"
@@ -644,6 +668,22 @@ export function BatchReview({
                 <dd className="text-right text-[var(--ink)]">{shared.gallery}</dd>
               </div>
             ) : null}
+            {shared.exhibitionYear.trim() ? (
+              <div className="flex justify-between gap-4">
+                <dt className="text-[var(--muted)]">Exhibition year</dt>
+                <dd className="text-right text-[var(--ink)]">
+                  {shared.exhibitionYear}
+                </dd>
+              </div>
+            ) : null}
+            {shared.photographer.trim() ? (
+              <div className="flex justify-between gap-4">
+                <dt className="text-[var(--muted)]">Photographer</dt>
+                <dd className="text-right text-[var(--ink)]">
+                  {shared.photographer}
+                </dd>
+              </div>
+            ) : null}
             <div className="flex justify-between gap-4">
               <dt className="text-[var(--muted)]">Total source size</dt>
               <dd className="text-[var(--ink)]">
@@ -715,10 +755,7 @@ export function BatchReview({
           Shared details
         </h2>
         <dl className="mt-3 border border-[var(--line)] bg-[var(--surface)] px-4">
-          <MetaRow label="Exhibition" value={shared.exhibition} />
-          <MetaRow label="Gallery / Venue" value={shared.gallery} />
-          <MetaRow label="Exhibition year" value={shared.exhibitionYear} />
-          <MetaRow label="Photographer" value={shared.photographer} />
+          <SharedMetaRows shared={shared} />
         </dl>
       </section>
 

@@ -18,6 +18,7 @@ export type TabHeaderStatus = {
   exists: boolean;
   comparison: HeaderComparison | { kind: "missing_tab" };
   canInitializeHeaders: boolean;
+  canInsertThumbnailColumn: boolean;
 };
 
 export type ConfigDiagnostics = {

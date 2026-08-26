@@ -10,7 +10,7 @@ import type { ProcessedImageOutput } from "@/lib/images/types";
 
 const TEMP_ROOT_NAME = "kimartarchive-image-processing";
 
-export type TempAssetKind = "hr" | "web";
+export type TempAssetKind = "hr" | "web" | "thumb";
 
 type TempManifestBase = {
   resultId: string;
@@ -24,6 +24,7 @@ export type TempProcessingManifest = TempManifestBase & {
   masterFilename: string;
   hr: Omit<ProcessedImageOutput, "format"> & { format: "jpeg"; storedName: string };
   web: Omit<ProcessedImageOutput, "format"> & { format: "jpeg"; storedName: string };
+  thumb: Omit<ProcessedImageOutput, "format"> & { format: "jpeg"; storedName: string };
   sourceOriginalFilename: string;
   warnings: string[];
 };
@@ -129,6 +130,7 @@ export type StoreTempOutputsInput = {
   warnings: string[];
   hr: ProcessedImageOutput & { buffer: Buffer };
   web: ProcessedImageOutput & { buffer: Buffer };
+  thumb: ProcessedImageOutput & { buffer: Buffer };
 };
 
 export type StoreTempOutputsResult = {
@@ -136,12 +138,14 @@ export type StoreTempOutputsResult = {
   expiresAt: number;
   hrUrl: string;
   webUrl: string;
+  thumbUrl: string;
   hrDownloadUrl: string;
   webDownloadUrl: string;
+  thumbDownloadUrl: string;
 };
 
 /**
- * Write HR/web buffers to an OS temp directory outside the repo.
+ * Write HR/web/thumb buffers to an OS temp directory outside the repo.
  * Returns opaque result IDs — never filesystem paths to the client.
  */
 export async function storeTempProcessingOutputs(
@@ -154,11 +158,15 @@ export async function storeTempProcessingOutputs(
   const dir = resultDir(resultId);
   const hrStored = "hr.jpg";
   const webStored = "web.jpg";
+  const thumbStored = "thumb.jpg";
 
   try {
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(dir, hrStored), input.hr.buffer, { mode: 0o600 });
     await fs.writeFile(path.join(dir, webStored), input.web.buffer, { mode: 0o600 });
+    await fs.writeFile(path.join(dir, thumbStored), input.thumb.buffer, {
+      mode: 0o600,
+    });
 
     const createdAt = Date.now();
     const expiresAt = createdAt + IMAGE_PROCESSING_CONFIG.tempTtlMs;
@@ -192,6 +200,16 @@ export async function storeTempProcessingOutputs(
         wasResized: input.web.wasResized,
         storedName: webStored,
       },
+      thumb: {
+        filename: input.thumb.filename,
+        width: input.thumb.width,
+        height: input.thumb.height,
+        byteLength: input.thumb.byteLength,
+        format: "jpeg",
+        quality: input.thumb.quality,
+        wasResized: input.thumb.wasResized,
+        storedName: thumbStored,
+      },
     };
 
     await fs.writeFile(
@@ -205,8 +223,10 @@ export async function storeTempProcessingOutputs(
       expiresAt,
       hrUrl: `/api/dev/processed-image/${resultId}/hr`,
       webUrl: `/api/dev/processed-image/${resultId}/web`,
+      thumbUrl: `/api/dev/processed-image/${resultId}/thumb`,
       hrDownloadUrl: `/api/dev/processed-image/${resultId}/hr?download=1`,
       webDownloadUrl: `/api/dev/processed-image/${resultId}/web?download=1`,
+      thumbDownloadUrl: `/api/dev/processed-image/${resultId}/thumb?download=1`,
     };
   } catch (error) {
     await removeDirQuiet(dir);
@@ -315,7 +335,9 @@ export async function getTempAsset(
     return null;
   }
 
-  const entry = asset === "hr" ? manifest.hr : manifest.web;
+  const entry =
+    asset === "hr" ? manifest.hr : asset === "web" ? manifest.web : manifest.thumb;
+  if (!entry) return null;
   const filePath = path.join(resultDir(resultId), entry.storedName);
 
   // Prevent traversal even if storedName were ever corrupted.

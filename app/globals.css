@@ -58,6 +58,61 @@ body {
   animation: fade-in 320ms ease-out both;
 }
 
+@keyframes submit-loading-dot {
+  0%,
+  70%,
+  100% {
+    opacity: 0.28;
+    transform: scale(0.7);
+  }
+  35% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.submit-loading-dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 1rem;
+}
+
+.submit-loading-dot {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background-color: var(--accent);
+  animation: submit-loading-dot 1.2s ease-in-out infinite both;
+}
+
+.submit-loading-dot:nth-child(2) {
+  animation-delay: 0.4s;
+}
+
+.submit-loading-dot:nth-child(3) {
+  animation-delay: 0.8s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .submit-loading-dot {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.year-nav-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.year-nav-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 ::selection {
   background: var(--accent-soft-strong);
   color: var(--ink);

@@ -14,6 +14,14 @@ import type {
   SupportedArtworkImageFormat,
 } from "@/lib/images/types";
 
+type LongEdgeJpegConfig = {
+  quality: number;
+  progressive: boolean;
+  maxLongEdge: number;
+  neverEnlarge: true;
+  sharpenWhenResized: { sigma: number; m1: number; m2: number };
+};
+
 type SharpInstance = ReturnType<typeof sharp>;
 type SharpMetadata = Awaited<ReturnType<SharpInstance["metadata"]>>;
 
@@ -159,6 +167,22 @@ export function readArtworkSourceMetadata(
   };
 }
 
+/**
+ * Pixel size after applying EXIF orientation tags 5–8 (axis swap).
+ * Matches Sharp `rotate()` with no angle, without opening the source again.
+ */
+export function orientedPixelSize(
+  width: number,
+  height: number,
+  orientation: number | null | undefined,
+): { width: number; height: number } {
+  const tag = orientation ?? 1;
+  if (tag >= 5 && tag <= 8) {
+    return { width: height, height: width };
+  }
+  return { width, height };
+}
+
 function createBasePipeline(sourceBytes: Buffer): SharpInstance {
   return sharp(sourceBytes, {
     failOn: "error",
@@ -178,14 +202,79 @@ function applyFlatten(pipeline: SharpInstance, hasAlpha: boolean): SharpInstance
   });
 }
 
-export async function generateHrJpegBuffer(
+function createSharedSourcePipeline(
   sourceBytes: Buffer,
   hasAlpha: boolean,
+): SharpInstance {
+  return applyFlatten(createBasePipeline(sourceBytes), hasAlpha);
+}
+
+type SharpChannels = 1 | 2 | 3 | 4;
+
+type DecodedSourcePixels = {
+  data: Buffer;
+  width: number;
+  height: number;
+  channels: SharpChannels;
+};
+
+/**
+ * Decode the master once (EXIF rotate, sRGB, flatten) into raw pixels.
+ * Sharp `.clone()` shares the compressed input, but each pipeline still
+ * decodes independently — materializing raw pixels is the reuse Sharp allows.
+ */
+async function decodeSourcePixels(
+  sourceBytes: Buffer,
+  hasAlpha: boolean,
+): Promise<DecodedSourcePixels> {
+  const { data, info } = await createSharedSourcePipeline(
+    sourceBytes,
+    hasAlpha,
+  )
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  if (!info.width || !info.height || !info.channels) {
+    throw new ArtworkImageProcessingError(
+      "MISSING_DIMENSIONS",
+      "Could not determine image dimensions after decoding.",
+    );
+  }
+  if (
+    info.channels !== 1 &&
+    info.channels !== 2 &&
+    info.channels !== 3 &&
+    info.channels !== 4
+  ) {
+    throw new ArtworkImageProcessingError(
+      "SHARP_DECODE_FAILURE",
+      "Could not decode source image pixels.",
+    );
+  }
+
+  return {
+    data,
+    width: info.width,
+    height: info.height,
+    channels: info.channels,
+  };
+}
+
+function pipelineFromDecodedPixels(decoded: DecodedSourcePixels): SharpInstance {
+  return sharp(decoded.data, {
+    raw: {
+      width: decoded.width,
+      height: decoded.height,
+      channels: decoded.channels,
+    },
+    limitInputPixels: IMAGE_PROCESSING_CONFIG.maxDecodedPixels,
+  }).withIccProfile("srgb");
+}
+
+async function encodeHrJpeg(
+  pipeline: SharpInstance,
 ): Promise<{ buffer: Buffer; info: SharpOutputInfo }> {
   const cfg = IMAGE_PROCESSING_CONFIG.hr;
-  let pipeline = createBasePipeline(sourceBytes);
-  pipeline = applyFlatten(pipeline, hasAlpha);
-
   const { data, info } = await pipeline
     .jpeg({
       quality: cfg.quality,
@@ -193,24 +282,19 @@ export async function generateHrJpegBuffer(
       mozjpeg: true,
     })
     .toBuffer({ resolveWithObject: true });
-
   return { buffer: data, info };
 }
 
-export async function generateWebJpegBuffer(
-  sourceBytes: Buffer,
-  hasAlpha: boolean,
+async function encodeLongEdgeJpeg(
+  pipeline: SharpInstance,
+  cfg: LongEdgeJpegConfig,
   sourceWidth: number,
   sourceHeight: number,
 ): Promise<{ buffer: Buffer; info: SharpOutputInfo; wasResized: boolean }> {
-  const cfg = IMAGE_PROCESSING_CONFIG.web;
   const longEdge = Math.max(sourceWidth, sourceHeight);
   const wasResized = longEdge > cfg.maxLongEdge;
 
-  let pipeline = createBasePipeline(sourceBytes);
-  pipeline = applyFlatten(pipeline, hasAlpha);
-
-  pipeline = pipeline.resize({
+  let next = pipeline.resize({
     width: cfg.maxLongEdge,
     height: cfg.maxLongEdge,
     fit: "inside",
@@ -219,10 +303,10 @@ export async function generateWebJpegBuffer(
   });
 
   if (wasResized) {
-    pipeline = pipeline.sharpen(cfg.sharpenWhenResized);
+    next = next.sharpen(cfg.sharpenWhenResized);
   }
 
-  const { data, info } = await pipeline
+  const { data, info } = await next
     .jpeg({
       quality: cfg.quality,
       progressive: cfg.progressive,
@@ -231,6 +315,47 @@ export async function generateWebJpegBuffer(
     .toBuffer({ resolveWithObject: true });
 
   return { buffer: data, info, wasResized };
+}
+
+async function timed<T>(work: Promise<T>): Promise<{ value: T; ms: number }> {
+  const started = Date.now();
+  const value = await work;
+  return { value, ms: Date.now() - started };
+}
+
+export async function generateHrJpegBuffer(
+  sourceBytes: Buffer,
+  hasAlpha: boolean,
+): Promise<{ buffer: Buffer; info: SharpOutputInfo }> {
+  return encodeHrJpeg(createSharedSourcePipeline(sourceBytes, hasAlpha));
+}
+
+export async function generateWebJpegBuffer(
+  sourceBytes: Buffer,
+  hasAlpha: boolean,
+  sourceWidth: number,
+  sourceHeight: number,
+): Promise<{ buffer: Buffer; info: SharpOutputInfo; wasResized: boolean }> {
+  return encodeLongEdgeJpeg(
+    createSharedSourcePipeline(sourceBytes, hasAlpha),
+    IMAGE_PROCESSING_CONFIG.web,
+    sourceWidth,
+    sourceHeight,
+  );
+}
+
+export async function generateThumbJpegBuffer(
+  sourceBytes: Buffer,
+  hasAlpha: boolean,
+  sourceWidth: number,
+  sourceHeight: number,
+): Promise<{ buffer: Buffer; info: SharpOutputInfo; wasResized: boolean }> {
+  return encodeLongEdgeJpeg(
+    createSharedSourcePipeline(sourceBytes, hasAlpha),
+    IMAGE_PROCESSING_CONFIG.thumb,
+    sourceWidth,
+    sourceHeight,
+  );
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -264,7 +389,7 @@ export type ProcessArtworkImageInput = {
 };
 
 /**
- * Process one artwork source image into HR + web JPG buffers.
+ * Process one artwork source image into HR, web, and thumbnail JPG buffers.
  * Master bytes are preserved as-is (not rewritten).
  */
 export async function processArtworkImage(
@@ -286,6 +411,7 @@ async function processArtworkImageInner(
   input: ProcessArtworkImageInput,
   started: number,
 ): Promise<ArtworkImageProcessingResult> {
+  const readStarted = Date.now();
   const { metadata, detectedFormat } = await validateArtworkSourceImage(
     input.sourceBytes,
     {
@@ -302,32 +428,58 @@ async function processArtworkImageInner(
   const warnings: string[] = [];
   if (source.isMultiPage) {
     warnings.push(
-      `This TIFF contains ${source.pageCount} pages. Only page 1 was used for HR and web derivatives. The original multi-page file is preserved unchanged as the master.`,
+      `This TIFF contains ${source.pageCount} pages. Only page 1 was used for HR, web, and thumbnail derivatives. The original multi-page file is preserved unchanged as the master.`,
     );
   }
 
-  // Oriented dimensions for resize decisions (rotate() applied in pipelines).
-  const oriented = await sharp(input.sourceBytes, {
-    failOn: "error",
-    pages: 1,
-    page: 0,
-    limitInputPixels: IMAGE_PROCESSING_CONFIG.maxDecodedPixels,
-  })
-    .rotate()
-    .metadata();
+  const decoded = await decodeSourcePixels(
+    input.sourceBytes,
+    source.hasAlpha,
+  );
+  const masterReadDecodeMs = Date.now() - readStarted;
 
-  const orientedWidth = oriented.width ?? source.width;
-  const orientedHeight = oriented.height ?? source.height;
-
-  const [hrResult, webResult] = await Promise.all([
-    generateHrJpegBuffer(input.sourceBytes, source.hasAlpha),
-    generateWebJpegBuffer(
-      input.sourceBytes,
-      source.hasAlpha,
-      orientedWidth,
-      orientedHeight,
+  const derivativesStarted = Date.now();
+  const [hrSettled, webSettled, thumbSettled] = await Promise.allSettled([
+    timed(encodeHrJpeg(pipelineFromDecodedPixels(decoded))),
+    timed(
+      encodeLongEdgeJpeg(
+        pipelineFromDecodedPixels(decoded),
+        IMAGE_PROCESSING_CONFIG.web,
+        decoded.width,
+        decoded.height,
+      ),
+    ),
+    timed(
+      encodeLongEdgeJpeg(
+        pipelineFromDecodedPixels(decoded),
+        IMAGE_PROCESSING_CONFIG.thumb,
+        decoded.width,
+        decoded.height,
+      ),
     ),
   ]);
+  const derivativesWallMs = Date.now() - derivativesStarted;
+
+  if (hrSettled.status === "rejected") {
+    throw mapImageProcessingError(hrSettled.reason);
+  }
+  if (webSettled.status === "rejected") {
+    throw mapImageProcessingError(webSettled.reason);
+  }
+  if (thumbSettled.status === "rejected") {
+    const mapped = mapImageProcessingError(thumbSettled.reason);
+    throw new ArtworkImageProcessingError(
+      "THUMBNAIL_GENERATION_FAILED",
+      mapped.message,
+    );
+  }
+
+  const hrTimed = hrSettled.value;
+  const webTimed = webSettled.value;
+  const thumbTimed = thumbSettled.value;
+  const hrResult = hrTimed.value;
+  const webResult = webTimed.value;
+  const thumbResult = thumbTimed.value;
 
   const hr: ProcessedImageOutput & { buffer: Buffer } = {
     filename: input.plannedFilenames.hr,
@@ -351,6 +503,17 @@ async function processArtworkImageInner(
     buffer: webResult.buffer,
   };
 
+  const thumb: ProcessedImageOutput & { buffer: Buffer } = {
+    filename: input.plannedFilenames.thumb,
+    width: thumbResult.info.width,
+    height: thumbResult.info.height,
+    byteLength: thumbResult.info.size,
+    format: "jpeg",
+    quality: IMAGE_PROCESSING_CONFIG.thumb.quality,
+    wasResized: thumbResult.wasResized,
+    buffer: thumbResult.buffer,
+  };
+
   const masterExt =
     normalizeMasterExtensionForPlan(input.originalFilename) ||
     extensionForFormat(detectedFormat);
@@ -365,8 +528,16 @@ async function processArtworkImageInner(
     },
     hr,
     web,
+    thumb,
     warnings,
     durationMs: Date.now() - started,
+    timings: {
+      masterReadDecodeMs,
+      hrGenerationMs: hrTimed.ms,
+      webGenerationMs: webTimed.ms,
+      thumbnailGenerationMs: thumbTimed.ms,
+      derivativesWallMs,
+    },
   };
 }
 

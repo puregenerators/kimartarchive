@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Cormorant_Garamond, Outfit, IBM_Plex_Mono } from "next/font/google";
 
-import { AppNav } from "@/components/AppNav";
+import { AppNav } from "@/components/AppNavClient";
 import "./globals.css";
 
 const display = Cormorant_Garamond({
@@ -23,8 +23,8 @@ const mono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Kim Artwork Archive",
-  description: "Private artwork intake for the Kim Artwork Archive.",
+  title: "Kim's Artwork Archive",
+  description: "Private artwork archive and intake for the Kim Artwork Archive.",
 };
 
 export default function RootLayout({

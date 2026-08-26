@@ -1,5 +1,6 @@
 "use server";
 
+import { requireAuthenticatedAction } from "@/lib/auth/access";
 import { disconnectDropbox, runDropboxDiagnostics } from "@/lib/dropbox/health";
 import { DropboxIntegrationError } from "@/lib/dropbox/errors";
 
@@ -26,6 +27,9 @@ function toResult(error: unknown): DropboxSetupActionResult {
 }
 
 export async function disconnectDropboxAction(): Promise<DropboxSetupActionResult> {
+  const access = await requireAuthenticatedAction();
+  if (!access.ok) return access;
+
   try {
     await disconnectDropbox();
     return {
@@ -38,6 +42,9 @@ export async function disconnectDropboxAction(): Promise<DropboxSetupActionResul
 }
 
 export async function runDropboxDiagnosticsAction() {
+  const access = await requireAuthenticatedAction();
+  if (!access.ok) return access;
+
   try {
     const diagnostics = await runDropboxDiagnostics();
     return { ok: true as const, diagnostics };

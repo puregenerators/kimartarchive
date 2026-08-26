@@ -4,9 +4,11 @@ Sharp derivative generation is used in three places:
 
 1. **UI TIFF thumbnails** — `POST /api/image-preview` creates temporary JPEG thumbnails so the intake UI can show TIFF masters (browsers cannot render TIFF natively).
 2. **Dev preview** — `/api/dev/process-artwork-image` for local visual testing from the review screen (temporary OS temp files only).
-3. **Permanent submission** — `POST /api/artwork-batches/submit` regenerates HR/web server-side during delivery (does not reuse client preview results).
+3. **Permanent submission** — `POST /api/artwork-batches/submit` regenerates HR/web/thumbnail server-side during delivery (does not reuse client preview results).
 
-Derivative settings live only in `lib/images/config.ts` and must not be duplicated in submission code. Preview thumbnail settings are a **separate** `preview` block in that file and must not be mixed with HR/web. See `docs/SUBMISSION_PIPELINE.md` for Drive/Sheets delivery.
+During submission (and the local dev preview), Sharp reads source metadata and decodes the master **once** into an in-memory raw pixel buffer. HR, web, and thumbnail are then encoded concurrently from that buffer. Sharp `.clone()` is not used for this: it shares the compressed input but still decodes independently per pipeline. The thumbnail is **not** produced by decoding the HR or web JPEG.
+
+Derivative settings live only in `lib/images/config.ts` and must not be duplicated in submission code. Preview thumbnail settings are a **separate** `preview` block and must not be mixed with HR / web / archival-thumb settings. See `docs/SUBMISSION_PIPELINE.md` for delivery.
 
 **The app is not the archive.** Drive stores permanent files; Sheets stores permanent metadata; local temps and form state are discarded after delivery.
 
@@ -64,6 +66,7 @@ YYYY/INVENTORYID_SanitizedTitle/
   YYYY_KO_INVENTORYID_SanitizedTitle_master_01.<ext>
   YYYY_KO_INVENTORYID_SanitizedTitle_hr_01.jpg
   YYYY_KO_INVENTORYID_SanitizedTitle_web_01.jpg
+  YYYY_KO_INVENTORYID_SanitizedTitle_thumb_01.jpg
 ```
 
 ---
@@ -99,6 +102,21 @@ Centralized in `lib/images/config.ts`. Refine after visual testing with Kim’s 
 | Metadata | Strip unnecessary tags; retain sRGB output intent |
 | Sharpening | Mild, **only if resized** (`sigma: 0.5`) |
 
+### Archival thumbnail JPG
+
+Stored in the artwork Dropbox folder and rendered in the Artwork Inventory **Thumbnail** cell. Distinct from the temporary UI TIFF preview.
+
+| Setting | Value |
+| --- | --- |
+| Filename | `…_thumb_01.jpg` |
+| Max long edge | **500 px** (never enlarge; preserve aspect ratio; never crop) |
+| JPEG quality | **84** |
+| Progressive | Yes |
+| Resize kernel | Lanczos3 |
+| Color | Convert to sRGB when supported; embed sRGB ICC |
+| Transparency | Flatten against white |
+| Sharpening | Mild, **only if resized** (same as web) |
+
 ### UI preview thumbnail (temporary)
 
 Used only so the intake UI can display TIFF masters. **Not** an archival derivative.
@@ -129,7 +147,7 @@ Used only so the intake UI can display TIFF masters. **Not** an archival derivat
 
 ## TIFF handling
 
-- Only **page 1** is used for HR, web, and UI thumbnail generation
+- Only **page 1** is used for HR, web, thumbnail, and UI thumbnail generation
 - If `pages > 1`, the UI shows a quiet note: “Multi-page TIFF · previewing page 1”
 - The original multi-page file remains the planned master bytes
 - Unsupported TIFF compression surfaces as a structured error when Sharp cannot decode
@@ -145,8 +163,9 @@ Processing writes under the OS temp directory, **outside the Git repository**:
 
 ```text
 {os.tmpdir()}/kimartarchive-image-processing/{resultId}/
-  hr.jpg          ← HR derivative (dev process / unused by UI thumbnails)
+  hr.jpg          ← HR derivative
   web.jpg         ← web derivative
+  thumb.jpg       ← archival thumbnail derivative
   preview.jpg     ← UI-only TIFF thumbnail (when kind is preview)
   manifest.json
 ```
@@ -154,7 +173,7 @@ Processing writes under the OS temp directory, **outside the Git repository**:
 | Behavior | Detail |
 | --- | --- |
 | Result ID | Opaque UUID (never raw filesystem paths in the API) |
-| HR / web preview | `GET /api/dev/processed-image/{resultId}/hr\|web` |
+| HR / web / thumb preview | `GET /api/dev/processed-image/{resultId}/hr\|web\|thumb` |
 | UI thumbnail | `GET /api/image-preview/{resultId}` |
 | TTL | **45 minutes**; expired dirs removed opportunistically |
 | Permissions | Directory `0700`, files `0600` |
@@ -195,7 +214,7 @@ Returns JSON with source metadata, derivative metadata, comparison stats, and op
 
 ### `GET /api/dev/processed-image/[resultId]/[asset]`
 
-Serves `hr` or `web` JPEG. Add `?download=1` for attachment disposition.
+Serves `hr`, `web`, or `thumb` JPEG. Add `?download=1` for attachment disposition.
 
 These routes must not become a general-purpose image CDN.
 
@@ -214,7 +233,7 @@ These routes must not become a general-purpose image CDN.
 9. Review the result panel, which is ordered for scanning:
    - Heading plus a quiet `Dev preview · processed in … ms` label, the source filename, and source size
    - Any warnings (for example multi-page TIFF handling), always outside collapsed areas
-   - A compact **Master / HR / Web / Processed in** summary row
+   - A compact **Master / HR / Web / Thumb / Processed in** summary row
    - Three-column previews (source / HR / web); TIFF sources use the temporary UI thumbnail when available
    - HR and web output details: filename with a **Copy** button, size and dimensions, quality and resize status, and one size-vs-source statement
    - A collapsed **Technical details** disclosure holding format, dimensions, color space, DPI, ICC, alpha, orientation, channels, and page count
@@ -248,5 +267,5 @@ TIFF UI thumbnails are keyed only by artwork id + source file identity (name, si
 - Local-only; not the final submission pipeline
 - Large masters may stress machine memory/CPU; timeout is 5 minutes
 - UI TIFF thumbnails require the local preview endpoint; if generation fails, a placeholder remains and submission is not blocked
-- Production upload architecture for large TIFFs remains unresolved (see `ARTWORK_INTAKE_SPEC.md` §12)
+- Production upload architecture for large TIFFs remains unresolved (see `ARTWORK_INTAKE_SPEC.md` §12). Vercel Function request bodies are capped at **4.5 MB**; this path cannot accept 250 MB masters.
 - Settings are provisional pending visual QA with Kim’s files

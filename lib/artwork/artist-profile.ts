@@ -7,7 +7,7 @@
 
 export type ArtistProfile = {
   artistName: string;
-  /** Filename prefixes/suffixes treated as artist identifiers, not title text. */
+  /** Filename tokens/phrases treated as artist identifiers, not title text. */
   filenameAliases: readonly string[];
 };
 
@@ -26,6 +26,10 @@ export const DEFAULT_ARTIST_PROFILE: ArtistProfile = {
     "kim-osgood",
     "KimOsgood",
     "kimosgood",
+    "Osgood",
+    "osgood",
+    "Osgoods",
+    "osgoods",
     "KO",
     "K.O.",
     "KO_",

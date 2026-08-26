@@ -1,14 +1,11 @@
 /**
- * DEVELOPMENT ONLY — temporary local image-processing tooling.
- *
- * Processes one artwork master into HR + web JPG derivatives for visual testing.
- * Does not upload to Google Drive, append Sheets rows, or claim inventory IDs.
- *
- * Remove or gate this route before production intake goes live.
+ * Authenticated preview tooling for intake (same shared-password gate as
+ * the rest of the app). Not part of the permanent submission pipeline.
  */
 
 import { NextResponse } from "next/server";
 
+import { unauthorizedApiResponse } from "@/lib/auth/access";
 import { planFilenamesForArtwork } from "@/lib/artwork/filenames";
 import { IMAGE_PROCESSING_CONFIG } from "@/lib/images/config";
 import {
@@ -50,6 +47,9 @@ function parseOptionalInt(value: FormDataEntryValue | null): number | null {
 }
 
 export async function POST(request: Request) {
+  const denied = await unauthorizedApiResponse();
+  if (denied) return denied;
+
   // DEV TOOLING: not part of the final submission pipeline.
   let artworkId: string | null = null;
 
@@ -123,8 +123,16 @@ export async function POST(request: Request) {
       typeof form.get("webFilename") === "string"
         ? (form.get("webFilename") as string).trim()
         : "";
+    let thumbFilename =
+      typeof form.get("thumbFilename") === "string"
+        ? (form.get("thumbFilename") as string).trim()
+        : "";
 
-    if ((!masterFilename || !hrFilename || !webFilename) && inventoryId && year) {
+    if (
+      (!masterFilename || !hrFilename || !webFilename || !thumbFilename) &&
+      inventoryId &&
+      year
+    ) {
       const planned = planFilenamesForArtwork({
         year,
         inventoryId,
@@ -134,12 +142,14 @@ export async function POST(request: Request) {
       masterFilename = masterFilename || planned.master;
       hrFilename = hrFilename || planned.hr;
       webFilename = webFilename || planned.web;
+      thumbFilename = thumbFilename || planned.thumb;
     }
 
     for (const [label, name] of [
       ["master", masterFilename],
       ["hr", hrFilename],
       ["web", webFilename],
+      ["thumb", thumbFilename],
     ] as const) {
       if (!name || !isSafePlannedFilename(name)) {
         return jsonError(
@@ -161,8 +171,19 @@ export async function POST(request: Request) {
         master: masterFilename,
         hr: hrFilename,
         web: webFilename,
+        thumb: thumbFilename,
       },
     });
+
+    console.info(
+      JSON.stringify({
+        scope: "image-processing",
+        event: "process_timings",
+        artworkId,
+        durationMs: processed.durationMs,
+        timings: processed.timings,
+      }),
+    );
 
     const stored = await storeTempProcessingOutputs({
       artworkId,
@@ -171,6 +192,7 @@ export async function POST(request: Request) {
       warnings: processed.warnings,
       hr: processed.hr,
       web: processed.web,
+      thumb: processed.thumb,
     });
 
     return NextResponse.json({
@@ -181,6 +203,7 @@ export async function POST(request: Request) {
       resultId: stored.resultId,
       expiresAt: stored.expiresAt,
       durationMs: processed.durationMs,
+      timings: processed.timings,
       warnings: processed.warnings,
       source: processed.source,
       master: processed.master,
@@ -205,6 +228,17 @@ export async function POST(request: Request) {
         wasResized: processed.web.wasResized,
         previewUrl: stored.webUrl,
         downloadUrl: stored.webDownloadUrl,
+      },
+      thumb: {
+        filename: processed.thumb.filename,
+        width: processed.thumb.width,
+        height: processed.thumb.height,
+        byteLength: processed.thumb.byteLength,
+        format: processed.thumb.format,
+        quality: processed.thumb.quality,
+        wasResized: processed.thumb.wasResized,
+        previewUrl: stored.thumbUrl,
+        downloadUrl: stored.thumbDownloadUrl,
       },
       comparisons: {
         hrSizeRatio:

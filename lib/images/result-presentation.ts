@@ -52,6 +52,7 @@ export function buildProcessingSummaryItems(
     { label: "Master", value: formatFileSize(result.master.byteLength) },
     { label: "HR", value: formatFileSize(result.hr.byteLength) },
     { label: "Web", value: formatFileSize(result.web.byteLength) },
+    { label: "Thumb", value: formatFileSize(result.thumb.byteLength) },
     { label: "Processed in", value: formatProcessingDuration(result.durationMs) },
   ];
 }

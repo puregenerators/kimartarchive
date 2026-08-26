@@ -1,4 +1,5 @@
 import { validateMediumValue } from "@/lib/artwork/medium";
+import { isUntitledArtwork } from "@/lib/artwork/untitled";
 import {
   DIMENSION_UNITS,
   MAX_ARTWORKS_PER_BATCH,
@@ -104,7 +105,7 @@ export function validateArtworkDraft(
 ): ArtworkValidationErrors {
   const errors: ArtworkValidationErrors = {};
 
-  if (!artwork.title.trim()) {
+  if (!isUntitledArtwork(artwork) && !artwork.title.trim()) {
     errors.title = "Title is required.";
   }
 
@@ -117,12 +118,12 @@ export function validateArtworkDraft(
     errors.medium = mediumError;
   }
 
-  if (!isPositiveNumber(artwork.height)) {
-    errors.height = "Height must be a positive number.";
+  if (artwork.height.trim() && !isPositiveNumber(artwork.height)) {
+    errors.height = "Height must be a positive number when provided.";
   }
 
-  if (!isPositiveNumber(artwork.width)) {
-    errors.width = "Width must be a positive number.";
+  if (artwork.width.trim() && !isPositiveNumber(artwork.width)) {
+    errors.width = "Width must be a positive number when provided.";
   }
 
   if (artwork.depth.trim() && !isPositiveNumber(artwork.depth)) {
@@ -224,13 +225,10 @@ export function formatDimensions(artwork: {
   depth: string;
   dimensionUnit: string;
 }): string {
-  const unit = artwork.dimensionUnit;
-  const h = artwork.height.trim();
-  const w = artwork.width.trim();
-  const d = artwork.depth.trim();
+  const parts = [artwork.height, artwork.width, artwork.depth]
+    .map((value) => value.trim())
+    .filter(Boolean);
 
-  if (d) {
-    return `${h} × ${w} × ${d} ${unit}`;
-  }
-  return `${h} × ${w} ${unit}`;
+  if (parts.length === 0) return "";
+  return `${parts.join(" × ")} ${artwork.dimensionUnit}`.trim();
 }

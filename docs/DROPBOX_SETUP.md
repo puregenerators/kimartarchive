@@ -232,4 +232,4 @@ Use **Reconnect** (or **Connect Dropbox** when disconnected). Completing OAuth o
 - Do not commit `.data/` or env files with secrets.
 - Do not log access tokens, refresh tokens, or the app secret.
 - Do not return tokens from API routes or Server Actions to the browser.
-- This app is local-only for one archive; add auth before any public deployment.
+- This app is gated by a shared password (`APP_ACCESS_PASSWORD`) and an HTTP-only session cookie. Missing password fails closed.

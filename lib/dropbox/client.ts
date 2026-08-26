@@ -11,6 +11,7 @@ import {
   mapDropboxApiError,
   sanitizeDropboxErrorText,
 } from "@/lib/dropbox/errors";
+import { isDropboxSharedLinkAlreadyExistsError } from "@/lib/dropbox/direct-image-url";
 import { refreshAccessToken as oauthRefreshAccessToken } from "@/lib/dropbox/oauth";
 import type {
   DropboxAccountPublic,
@@ -440,13 +441,7 @@ export async function getDropboxClient(
           };
         } catch (error) {
           const err = error as DropboxHttpError;
-          const alreadyExists =
-            err.errorTag === "shared_link_already_exists" ||
-            (err.errorSummary ?? err.message ?? "")
-              .toLowerCase()
-              .includes("shared_link_already_exists");
-
-          if (!alreadyExists) {
+          if (!isDropboxSharedLinkAlreadyExistsError(err)) {
             throw error;
           }
 

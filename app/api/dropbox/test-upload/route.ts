@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { unauthorizedApiResponse } from "@/lib/auth/access";
 import { DropboxIntegrationError } from "@/lib/dropbox/errors";
 import { getDropboxFilesOps } from "@/lib/dropbox/files";
 import { runDropboxUploadTest } from "@/lib/dropbox/test-upload";
@@ -12,6 +13,9 @@ export const dynamic = "force-dynamic";
  * Does not touch the artwork submission pipeline.
  */
 export async function POST() {
+  const denied = await unauthorizedApiResponse();
+  if (denied) return denied;
+
   try {
     const ops = await getDropboxFilesOps();
     const result = await runDropboxUploadTest({ ops });

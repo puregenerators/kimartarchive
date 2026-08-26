@@ -123,7 +123,8 @@ export function appendFilesToBatch(
 
   let runningBytes = totalBatchBytes(nextArtworks);
 
-  for (const file of files) {
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index]!;
     const existing = findDuplicateArtwork(nextArtworks, file);
     if (existing && !allowDuplicates) {
       duplicates.push({
@@ -133,6 +134,20 @@ export function appendFilesToBatch(
       });
       pendingDuplicates.push(file);
       continue;
+    }
+
+    // Count accepted drafts only. `nextArtworks` already includes files added
+    // in this call — do not also add `added.length` or a 24-cap becomes 12.
+    if (nextArtworks.length >= MAX_ARTWORKS_PER_BATCH) {
+      const skipped = files.length - index;
+      rejected.push({
+        code: "batch_count",
+        message:
+          skipped === 1
+            ? `A batch can include at most ${MAX_ARTWORKS_PER_BATCH} artworks.`
+            : `A batch can include at most ${MAX_ARTWORKS_PER_BATCH} artworks. ${skipped} files were not added.`,
+      });
+      break;
     }
 
     const evaluated = evaluateSingleImage(file);
@@ -146,15 +161,6 @@ export function appendFilesToBatch(
         message: evaluated.error,
       });
       continue;
-    }
-
-    if (nextArtworks.length + added.length >= MAX_ARTWORKS_PER_BATCH) {
-      rejected.push({
-        code: "batch_count",
-        message: `A batch can include at most ${MAX_ARTWORKS_PER_BATCH} artworks.`,
-      });
-      // Stop accepting further files once the count cap is hit.
-      break;
     }
 
     if (runningBytes + file.size > MAX_BATCH_BYTES) {
@@ -216,7 +222,8 @@ export function replaceArtworkImage(
   });
 
   const shouldRefreshSuggestedTitle =
-    artwork.titleSuggestedFromFilename || !artwork.title.trim();
+    !artwork.isUntitled &&
+    (artwork.titleSuggestedFromFilename || !artwork.title.trim());
 
   return {
     ok: true,
@@ -275,10 +282,8 @@ export function clearProcessingForArtwork<T>(
 
 export function artworkNeedsMetadata(artwork: ArtworkDraft): boolean {
   return (
-    !artwork.title.trim() ||
+    (!artwork.isUntitled && !artwork.title.trim()) ||
     !artwork.year.trim() ||
-    !artwork.medium.trim() ||
-    !artwork.height.trim() ||
-    !artwork.width.trim()
+    !artwork.medium.trim()
   );
 }

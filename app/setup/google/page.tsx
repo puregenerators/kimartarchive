@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SetupGoogleClient } from "@/app/setup/google/SetupGoogleClient";
+import { requireAuthenticatedPage } from "@/lib/auth/access";
 import { runGoogleDiagnostics } from "@/lib/google/diagnostics";
 
 export const metadata = {
@@ -10,6 +11,7 @@ export const metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function SetupGooglePage() {
+  await requireAuthenticatedPage();
   const diagnostics = await runGoogleDiagnostics();
 
   return (

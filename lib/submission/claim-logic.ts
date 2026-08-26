@@ -1,4 +1,5 @@
 import { sanitizeTitleForFilename } from "@/lib/artwork/filenames";
+import { resolveArtworkTitle } from "@/lib/artwork/untitled";
 import type {
   ArtworkSubmissionInput,
   ClaimStatus,
@@ -143,7 +144,7 @@ export function resolveArtworkMetadata(
     override.trim() ? override.trim() : fallback.trim();
 
   return {
-    title: artwork.title.trim(),
+    title: resolveArtworkTitle(artwork),
     year: artwork.year.trim(),
     medium: artwork.medium.trim(),
     height: artwork.height.trim(),

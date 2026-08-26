@@ -5,8 +5,14 @@ import { ArtworkCard, revokeArtworkImage } from "@/components/artwork/ArtworkCar
 import { BatchImageUploader } from "@/components/artwork/BatchImageUploader";
 import { BatchReview } from "@/components/artwork/BatchReview";
 import { BatchSummaryBar } from "@/components/artwork/BatchSummaryBar";
+import { ClearBatchConfirmationView } from "@/components/artwork/ClearBatchConfirmationView";
 import { SharedDetailsSection } from "@/components/artwork/SharedDetailsSection";
 import { useTiffPreviews } from "@/components/artwork/useTiffPreviews";
+import {
+  createFreshIntakeBatch,
+  reduceClearBatchUi,
+  type ClearBatchUiPhase,
+} from "@/lib/artwork/batch-reset";
 import {
   appendFilesToBatch,
   artworkNeedsMetadata,
@@ -22,15 +28,21 @@ import {
   APPLYABLE_SHARED_FIELDS,
   DEFAULT_APPLY_SELECTION,
   applySharedDetailsToArtworks,
-  createEmptyBatch,
+  MAX_ARTWORKS_PER_BATCH,
   formatArtworkNumber,
   previewInventoryIdForIndex,
+  remainingArtworkSlots,
   type ApplyableSharedFieldKey,
   type ArtworkDraft,
   type BatchDraft,
   type BatchSharedDetails,
   type BatchValidationResult,
 } from "@/lib/artwork/types";
+import {
+  applyUntitledToSelectedArtworks,
+  artworkHasTitleToOverwrite,
+  resolveArtworkTitle,
+} from "@/lib/artwork/untitled";
 import { hasBatchErrors, validateBatch } from "@/lib/artwork/validation";
 import type { ArtworkProcessingState } from "@/lib/images/client-types";
 import { isProcessingResultStale } from "@/lib/images/fingerprint";
@@ -40,14 +52,21 @@ export function NewArtworkBatchForm({
 }: {
   archiveTarget?: "test" | "production" | "invalid";
 }) {
-  const [batch, setBatch] = useState<BatchDraft>(() => createEmptyBatch());
+  const [batch, setBatch] = useState<BatchDraft>(
+    () => createFreshIntakeBatch().batch,
+  );
   const [mode, setMode] = useState<"edit" | "review">("edit");
   const [errors, setErrors] = useState<BatchValidationResult>({ artworks: {} });
   const [applyOpen, setApplyOpen] = useState(false);
   const [applySelection, setApplySelection] = useState<ApplyableSharedFieldKey[]>(
     [...DEFAULT_APPLY_SELECTION],
   );
-  const [clearOpen, setClearOpen] = useState(false);
+  const [untitledOpen, setUntitledOpen] = useState(false);
+  const [untitledSelection, setUntitledSelection] = useState<string[]>([]);
+  const [untitledOverwriteConfirm, setUntitledOverwriteConfirm] =
+    useState(false);
+  const [clearPhase, setClearPhase] = useState<ClearBatchUiPhase>("idle");
+  const [formEpoch, setFormEpoch] = useState(0);
   const [showAddMore, setShowAddMore] = useState(false);
   const [uploadNotice, setUploadNotice] = useState<string | null>(null);
   const [uploadRejects, setUploadRejects] = useState<AppendFilesRejection[]>([]);
@@ -65,16 +84,16 @@ export function NewArtworkBatchForm({
     invalidateArtwork,
     resetAll: resetTiffPreviews,
   } = useTiffPreviews();
-  const artworksRef = useRef(batch.artworks);
+  const batchRef = useRef(batch);
   const artworksSectionRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    artworksRef.current = batch.artworks;
-  }, [batch.artworks]);
+    batchRef.current = batch;
+  }, [batch]);
 
   useEffect(() => {
     return () => {
-      for (const artwork of artworksRef.current) {
+      for (const artwork of batchRef.current.artworks) {
         revokeArtworkImage(artwork);
       }
     };
@@ -106,11 +125,12 @@ export function NewArtworkBatchForm({
   }
 
   function ingestFiles(files: File[], allowDuplicates = false) {
-    const result = appendFilesToBatch(batch, files, {
+    const result = appendFilesToBatch(batchRef.current, files, {
       allowDuplicates,
       createPreviewUrls: true,
     });
 
+    batchRef.current = result.batch;
     setBatch(result.batch);
     setUploadRejects(result.rejected);
 
@@ -175,21 +195,68 @@ export function NewArtworkBatchForm({
     setApplyOpen(false);
   }
 
+  function confirmApplyUntitled() {
+    const result = applyUntitledToSelectedArtworks(
+      batch.artworks,
+      untitledSelection,
+      { overwriteTitled: untitledOverwriteConfirm },
+    );
+    if (result.blocked.length > 0) {
+      return;
+    }
+    setBatch((current) => ({ ...current, artworks: result.artworks }));
+    setErrors((current) => {
+      const artworks = { ...current.artworks };
+      for (const id of untitledSelection) {
+        const existing = artworks[id];
+        if (!existing?.title) continue;
+        const next = { ...existing };
+        delete next.title;
+        if (Object.keys(next).length === 0) delete artworks[id];
+        else artworks[id] = next;
+      }
+      return { form: undefined, artworks };
+    });
+    setUntitledOpen(false);
+    setUntitledSelection([]);
+    setUntitledOverwriteConfirm(false);
+  }
+
   function resetBatch() {
-    for (const artwork of batch.artworks) {
+    for (const artwork of batchRef.current.artworks) {
       revokeArtworkImage(artwork);
     }
     resetTiffPreviews();
-    setBatch(createEmptyBatch());
-    setErrors({ artworks: {} });
-    setProcessingByArtworkId({});
-    setMode("edit");
-    setApplyOpen(false);
-    setClearOpen(false);
-    setShowAddMore(false);
-    setUploadNotice(null);
-    setUploadRejects([]);
-    setDuplicatePrompt(null);
+    const fresh = createFreshIntakeBatch();
+    batchRef.current = fresh.batch;
+    setBatch(fresh.batch);
+    setErrors(fresh.errors);
+    setProcessingByArtworkId(fresh.processingByArtworkId);
+    setMode(fresh.mode);
+    setApplyOpen(fresh.applyOpen);
+    setApplySelection([...fresh.applySelection]);
+    setUntitledOpen(fresh.untitledOpen);
+    setUntitledSelection(fresh.untitledSelection);
+    setUntitledOverwriteConfirm(fresh.untitledOverwriteConfirm);
+    setClearPhase(fresh.clearPhase);
+    setShowAddMore(fresh.showAddMore);
+    setUploadNotice(fresh.uploadNotice);
+    setUploadRejects(fresh.uploadRejects);
+    setDuplicatePrompt(fresh.duplicatePrompt);
+    setFormEpoch((current) => current + 1);
+  }
+
+  function requestClearBatch() {
+    setClearPhase((current) => reduceClearBatchUi(current, "request-clear"));
+  }
+
+  function cancelClearBatch() {
+    setClearPhase((current) => reduceClearBatchUi(current, "cancel"));
+  }
+
+  function confirmClearBatch() {
+    if (clearPhase !== "confirm") return;
+    resetBatch();
   }
 
   function updateProcessing(
@@ -203,10 +270,11 @@ export function NewArtworkBatchForm({
   }
 
   function handleReview() {
-    const result = validateBatch(batch);
+    const current = batchRef.current;
+    const result = validateBatch(current);
     if (hasBatchErrors(result)) {
       setErrors(result);
-      const firstInvalid = batch.artworks.find((a) => result.artworks[a.id]);
+      const firstInvalid = current.artworks.find((a) => result.artworks[a.id]);
       if (firstInvalid) {
         requestAnimationFrame(() => {
           document
@@ -231,7 +299,7 @@ export function NewArtworkBatchForm({
         return;
       }
       const fingerprintInput = {
-        title: artwork.title,
+        title: resolveArtworkTitle(artwork),
         year: artwork.year,
         previewInventoryId: previewInventoryIdForIndex(index),
         imageName: artwork.image.file.name,
@@ -269,6 +337,7 @@ export function NewArtworkBatchForm({
   }
 
   const count = batch.artworks.length;
+  const remainingSlots = remainingArtworkSlots(count);
   const { testedSuccessfully, notYetTested } = processingStats();
   const needingMetadata = batch.artworks.filter(artworkNeedsMetadata).length;
   const validationErrorCount = Object.keys(errors.artworks).length;
@@ -276,10 +345,7 @@ export function NewArtworkBatchForm({
   return (
     <div>
       <header className="max-w-2xl">
-        <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
-          Kim Osgood Archive
-        </p>
-        <h1 className="mt-3 font-display text-4xl tracking-tight text-[var(--ink)] sm:text-5xl">
+        <h1 className="font-display text-4xl tracking-tight text-[var(--ink)] sm:text-5xl">
           Add New Artwork
         </h1>
         <ul className="mt-4 list-disc space-y-1 pl-5 text-[var(--muted)] leading-relaxed">
@@ -292,20 +358,29 @@ export function NewArtworkBatchForm({
         </ul>
         {count > 0 ? (
           <p className="mt-3 text-sm text-[var(--ink-soft)]">
-            {count} artwork{count === 1 ? "" : "s"} in this batch
+            {count} of {MAX_ARTWORKS_PER_BATCH} artworks in this batch
           </p>
         ) : null}
       </header>
 
       <form
+        key={formEpoch}
         className="mt-10 space-y-8"
+        autoComplete="off"
         onSubmit={(event) => {
           event.preventDefault();
           handleReview();
         }}
+        onReset={(event) => {
+          event.preventDefault();
+        }}
         noValidate
       >
-        <BatchImageUploader onFilesSelected={(files) => ingestFiles(files)} />
+        <BatchImageUploader
+          disabled={remainingSlots === 0}
+          remainingSlots={remainingSlots}
+          onFilesSelected={(files) => ingestFiles(files)}
+        />
 
         {uploadNotice ? (
           <p
@@ -391,138 +466,107 @@ export function NewArtworkBatchForm({
           </div>
         ) : null}
 
+        <SharedDetailsSection
+          shared={batch.shared}
+          onChange={updateShared}
+          canApply={count > 0}
+          onRequestApply={() => {
+            setApplySelection([...DEFAULT_APPLY_SELECTION]);
+            setApplyOpen(true);
+          }}
+        />
+
+        {applyOpen && count > 0 ? (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="apply-shared-title"
+            className="border border-[var(--accent)] bg-[var(--surface-elevated)] p-5 shadow-sm"
+          >
+            <h2
+              id="apply-shared-title"
+              className="font-display text-xl text-[var(--ink)]"
+            >
+              Apply shared details to all artworks?
+            </h2>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              Choose which fields to update. Only populated shared values are
+              applied; blank shared fields leave each artwork’s existing value
+              unchanged:
+            </p>
+            <ul className="mt-3 space-y-2 text-sm text-[var(--ink)]">
+              {APPLYABLE_SHARED_FIELDS.map((field) => {
+                const checked = applySelection.includes(field.key);
+                return (
+                  <li key={field.key}>
+                    <label className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={checked}
+                        onChange={() => {
+                          setApplySelection((current) =>
+                            checked
+                              ? current.filter((key) => key !== field.key)
+                              : [...current, field.key],
+                          );
+                        }}
+                      />
+                      <span>
+                        {field.label} ← {field.from}
+                      </span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="mt-3 text-sm text-[var(--muted)]">
+              Title, Height, Width, Depth, Notes, and images are never
+              changed by this action. Use Apply Untitled to selected
+              artworks to mark unknown titles.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <button
+                type="button"
+                disabled={applySelection.length === 0}
+                onClick={confirmApplyShared}
+                className="border border-[var(--ink)] bg-[var(--ink)] px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--paper)] disabled:opacity-40"
+              >
+                Apply selected
+              </button>
+              <button
+                type="button"
+                onClick={() => setApplyOpen(false)}
+                className="px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--muted)] hover:text-[var(--ink)]"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         {count > 0 ? (
           <>
             <BatchSummaryBar
               artworkCount={count}
+              maxArtworks={MAX_ARTWORKS_PER_BATCH}
               totalBytes={totalBatchBytes(batch.artworks)}
               needingMetadata={needingMetadata}
               validationErrors={validationErrorCount}
               testedSuccessfully={testedSuccessfully}
               notYetTested={notYetTested}
+              canAddMore={remainingSlots > 0}
               onAddMore={() => setShowAddMore(true)}
-              onRequestClear={() => setClearOpen(true)}
+              onRequestClear={requestClearBatch}
             />
 
             {showAddMore ? (
               <BatchImageUploader
                 compact
+                disabled={remainingSlots === 0}
+                remainingSlots={remainingSlots}
                 onFilesSelected={(files) => ingestFiles(files)}
               />
-            ) : null}
-
-            <SharedDetailsSection
-              shared={batch.shared}
-              onChange={updateShared}
-              onRequestApply={() => {
-                setApplySelection([...DEFAULT_APPLY_SELECTION]);
-                setApplyOpen(true);
-              }}
-            />
-
-            {applyOpen ? (
-              <div
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="apply-shared-title"
-                className="border border-[var(--accent)] bg-[var(--surface-elevated)] p-5 shadow-sm"
-              >
-                <h2
-                  id="apply-shared-title"
-                  className="font-display text-xl text-[var(--ink)]"
-                >
-                  Apply shared details to all artworks?
-                </h2>
-                <p className="mt-2 text-sm text-[var(--muted)]">
-                  Choose which fields to update. Existing artwork-specific values
-                  for selected fields will be overwritten with the current shared
-                  defaults:
-                </p>
-                <ul className="mt-3 space-y-2 text-sm text-[var(--ink)]">
-                  {APPLYABLE_SHARED_FIELDS.map((field) => {
-                    const checked = applySelection.includes(field.key);
-                    return (
-                      <li key={field.key}>
-                        <label className="flex items-start gap-2">
-                          <input
-                            type="checkbox"
-                            className="mt-1"
-                            checked={checked}
-                            onChange={() => {
-                              setApplySelection((current) =>
-                                checked
-                                  ? current.filter((key) => key !== field.key)
-                                  : [...current, field.key],
-                              );
-                            }}
-                          />
-                          <span>
-                            {field.label} ← {field.from}
-                          </span>
-                        </label>
-                      </li>
-                    );
-                  })}
-                </ul>
-                <p className="mt-3 text-sm text-[var(--muted)]">
-                  Title, Height, Width, Depth, Notes, and images are never
-                  changed by this action.
-                </p>
-                <div className="mt-5 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    disabled={applySelection.length === 0}
-                    onClick={confirmApplyShared}
-                    className="border border-[var(--ink)] bg-[var(--ink)] px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--paper)] disabled:opacity-40"
-                  >
-                    Apply selected
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setApplyOpen(false)}
-                    className="px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--muted)] hover:text-[var(--ink)]"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
-            {clearOpen ? (
-              <div
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="clear-batch-title"
-                className="border border-[var(--danger)] bg-[var(--danger-soft)] p-5"
-              >
-                <h2
-                  id="clear-batch-title"
-                  className="font-display text-xl text-[var(--ink)]"
-                >
-                  Clear this entire batch?
-                </h2>
-                <p className="mt-2 text-sm text-[var(--muted)]">
-                  This removes all {count} artwork
-                  {count === 1 ? "" : "s"}, images, and local processing results.
-                  This cannot be undone.
-                </p>
-                <div className="mt-5 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={resetBatch}
-                    className="border border-[var(--danger)] bg-[var(--danger)] px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--paper)]"
-                  >
-                    Yes, clear batch
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setClearOpen(false)}
-                    className="px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--muted)] hover:text-[var(--ink)]"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
             ) : null}
 
             <section
@@ -530,19 +574,132 @@ export function NewArtworkBatchForm({
               aria-labelledby="artworks-heading"
               className="space-y-3"
             >
-              <div>
-                <h2
-                  id="artworks-heading"
-                  className="font-display text-2xl text-[var(--ink)]"
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2
+                    id="artworks-heading"
+                    className="font-display text-2xl text-[var(--ink)]"
+                  >
+                    Artworks
+                  </h2>
+                  <p className="mt-1 text-sm text-[var(--muted)]">
+                    One image per artwork. Preview inventory numbers follow current
+                    order ({formatArtworkNumber(0)} → 1000). Enter titles and
+                    dimensions quickly in the compact rows below.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUntitledSelection([]);
+                    setUntitledOverwriteConfirm(false);
+                    setUntitledOpen(true);
+                  }}
+                  className="shrink-0 self-start border border-[var(--line)] bg-[var(--surface-elevated)] px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--ink)] transition hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                 >
-                  Artworks
-                </h2>
-                <p className="mt-1 text-sm text-[var(--muted)]">
-                  One image per artwork. Preview inventory numbers follow current
-                  order ({formatArtworkNumber(0)} → 1000). Enter titles and
-                  dimensions quickly in the compact rows below.
-                </p>
+                  Apply Untitled to selected artworks
+                </button>
               </div>
+
+              {untitledOpen ? (
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="apply-untitled-title"
+                  className="border border-[var(--accent)] bg-[var(--surface-elevated)] p-5 shadow-sm"
+                >
+                  <h2
+                    id="apply-untitled-title"
+                    className="font-display text-xl text-[var(--ink)]"
+                  >
+                    Apply Untitled to selected artworks
+                  </h2>
+                  <p className="mt-2 text-sm text-[var(--muted)]">
+                    Selected works will be archived with the title Untitled.
+                    Inventory IDs keep them unique. This does not run unless you
+                    choose artworks below.
+                  </p>
+                  <ul className="mt-3 space-y-2 text-sm text-[var(--ink)]">
+                    {batch.artworks.map((artwork, index) => {
+                      const checked = untitledSelection.includes(artwork.id);
+                      const archived = resolveArtworkTitle(artwork);
+                      return (
+                        <li key={artwork.id}>
+                          <label className="flex items-start gap-2">
+                            <input
+                              type="checkbox"
+                              className="mt-1"
+                              checked={checked}
+                              onChange={() => {
+                                setUntitledOverwriteConfirm(false);
+                                setUntitledSelection((current) =>
+                                  checked
+                                    ? current.filter((id) => id !== artwork.id)
+                                    : [...current, artwork.id],
+                                );
+                              }}
+                            />
+                            <span>
+                              Artwork {formatArtworkNumber(index)} ·{" "}
+                              {archived || "No title yet"}
+                            </span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {batch.artworks.some(
+                    (artwork) =>
+                      untitledSelection.includes(artwork.id) &&
+                      artworkHasTitleToOverwrite(artwork),
+                  ) ? (
+                    <label className="mt-4 flex items-start gap-2 text-sm text-[var(--ink)]">
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={untitledOverwriteConfirm}
+                        onChange={(event) =>
+                          setUntitledOverwriteConfirm(event.target.checked)
+                        }
+                      />
+                      <span>
+                        Replace existing titles with Untitled. This cannot be
+                        undone except by unchecking Missing / no known title on
+                        each card.
+                      </span>
+                    </label>
+                  ) : null}
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      disabled={
+                        untitledSelection.length === 0 ||
+                        (batch.artworks.some(
+                          (artwork) =>
+                            untitledSelection.includes(artwork.id) &&
+                            artworkHasTitleToOverwrite(artwork),
+                        ) &&
+                          !untitledOverwriteConfirm)
+                      }
+                      onClick={confirmApplyUntitled}
+                      className="border border-[var(--ink)] bg-[var(--ink)] px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--paper)] disabled:opacity-40"
+                    >
+                      Apply Untitled
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUntitledOpen(false);
+                        setUntitledSelection([]);
+                        setUntitledOverwriteConfirm(false);
+                      }}
+                      className="px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--muted)] hover:text-[var(--ink)]"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
 
               <div className="space-y-3">
                 {batch.artworks.map((artwork, index) => (
@@ -571,13 +728,14 @@ export function NewArtworkBatchForm({
             <div className="flex flex-col-reverse gap-3 border-t border-[var(--line)] pt-6 sm:flex-row sm:justify-end">
               <button
                 type="button"
-                onClick={() => setClearOpen(true)}
+                onClick={requestClearBatch}
                 className="px-5 py-3 text-sm uppercase tracking-[0.14em] text-[var(--muted)] transition hover:text-[var(--ink)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
               >
                 Clear Batch…
               </button>
               <button
-                type="submit"
+                type="button"
+                onClick={handleReview}
                 className="border border-[var(--ink)] bg-[var(--ink)] px-6 py-3 text-sm uppercase tracking-[0.14em] text-[var(--paper)] transition hover:bg-[var(--ink-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
               >
                 Review Batch
@@ -586,6 +744,12 @@ export function NewArtworkBatchForm({
           </>
         ) : null}
       </form>
+      {clearPhase === "confirm" ? (
+        <ClearBatchConfirmationView
+          onCancel={cancelClearBatch}
+          onConfirm={confirmClearBatch}
+        />
+      ) : null}
     </div>
   );
 }

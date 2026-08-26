@@ -44,6 +44,7 @@ export type PortableArtworkMetadata = {
     master: ArtworkMetadataFileRef;
     highResolution: ArtworkMetadataFileRef;
     web: ArtworkMetadataFileRef;
+    thumbnail: ArtworkMetadataFileRef;
     /** Self-reference: Inventory-ID-based metadata filename. */
     metadata: {
       filename: string;
@@ -78,6 +79,7 @@ export function buildPortableArtworkMetadata(params: {
   master: DriveResourceRef;
   hr: DriveResourceRef;
   web: DriveResourceRef;
+  thumb: DriveResourceRef;
   folder: DriveResourceRef;
   /** Planned Inventory-ID-based metadata filename. */
   metadataFilename: string;
@@ -115,6 +117,10 @@ export function buildPortableArtworkMetadata(params: {
       web: {
         filename: params.web.name,
         url: params.web.webViewLink,
+      },
+      thumbnail: {
+        filename: params.thumb.name,
+        url: params.thumb.webViewLink,
       },
       metadata: {
         filename: params.metadataFilename,

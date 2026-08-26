@@ -1,8 +1,13 @@
 export const ARTWORK_INVENTORY_TAB = "Artwork Inventory";
 export const INVENTORY_CLAIMS_TAB = "Inventory Claims";
 
-export const ARTWORK_INVENTORY_HEADERS = [
-  "Inventory ID",
+export const ARTWORK_INVENTORY_THUMBNAIL_HEADER = "Thumbnail" as const;
+
+/**
+ * Columns after Inventory ID, excluding the Thumbnail display column.
+ * Shared so the live schema and the pre-Thumbnail schema stay aligned.
+ */
+const ARTWORK_INVENTORY_HEADERS_AFTER_TITLE = [
   "Title",
   "Year",
   "Medium",
@@ -25,6 +30,21 @@ export const ARTWORK_INVENTORY_HEADERS = [
   "Updated At",
 ] as const;
 
+/**
+ * Live Artwork Inventory schema immediately before the Thumbnail column
+ * was added (21 columns). Used by the Thumbnail insert migration.
+ */
+export const ARTWORK_INVENTORY_HEADERS_BEFORE_THUMBNAIL = [
+  "Inventory ID",
+  ...ARTWORK_INVENTORY_HEADERS_AFTER_TITLE,
+] as const;
+
+export const ARTWORK_INVENTORY_HEADERS = [
+  "Inventory ID",
+  ARTWORK_INVENTORY_THUMBNAIL_HEADER,
+  ...ARTWORK_INVENTORY_HEADERS_AFTER_TITLE,
+] as const;
+
 export const INVENTORY_CLAIMS_HEADERS = [
   "Claim ID",
   "Inventory ID",
@@ -32,6 +52,19 @@ export const INVENTORY_CLAIMS_HEADERS = [
   "Created At",
   "Completed At",
 ] as const;
+
+export type ArtworkInventoryHeader =
+  (typeof ARTWORK_INVENTORY_HEADERS)[number];
+
+/** 0-based index of a live Artwork Inventory header. */
+export function artworkInventoryColumnIndex(
+  header: ArtworkInventoryHeader,
+): number {
+  return ARTWORK_INVENTORY_HEADERS.indexOf(header);
+}
+
+export const ARTWORK_INVENTORY_THUMBNAIL_COLUMN_INDEX =
+  artworkInventoryColumnIndex(ARTWORK_INVENTORY_THUMBNAIL_HEADER);
 
 export type HeaderStatusKind =
   | "missing_tab"
@@ -62,6 +95,16 @@ export function normalizeHeaderRow(row: string[] | null | undefined): string[] {
     end -= 1;
   }
   return cells.slice(0, end);
+}
+
+export function headersEqual(
+  actual: readonly string[],
+  expected: readonly string[],
+): boolean {
+  return (
+    actual.length === expected.length &&
+    actual.every((header, index) => header === expected[index])
+  );
 }
 
 export function compareHeaders(

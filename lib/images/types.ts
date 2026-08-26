@@ -16,7 +16,8 @@ export type ArtworkImageProcessingErrorCode =
   | "PROCESSING_TIMEOUT"
   | "INVALID_FILENAME"
   | "MISSING_FILE"
-  | "INVALID_REQUEST";
+  | "INVALID_REQUEST"
+  | "THUMBNAIL_GENERATION_FAILED";
 
 export type ArtworkSourceMetadata = {
   originalFilename: string;
@@ -42,7 +43,7 @@ export type ProcessedImageOutput = {
   byteLength: number;
   format: "jpeg";
   quality: number;
-  /** True when the long edge was reduced for the web derivative. */
+  /** True when the long edge was reduced for this derivative. */
   wasResized: boolean;
 };
 
@@ -54,13 +55,26 @@ export type PlannedMasterInfo = {
   preservedOriginalBytes: true;
 };
 
+/** Server/dev diagnostics only — not stored as artwork metadata. */
+export type ArtworkImageProcessingTimings = {
+  /** Metadata plus one pixel decode of the master (reused for all derivatives). */
+  masterReadDecodeMs: number;
+  hrGenerationMs: number;
+  webGenerationMs: number;
+  thumbnailGenerationMs: number;
+  /** Wall clock of concurrent HR + web + thumbnail generation. */
+  derivativesWallMs: number;
+};
+
 export type ArtworkImageProcessingResult = {
   source: ArtworkSourceMetadata;
   master: PlannedMasterInfo;
   hr: ProcessedImageOutput & { buffer: Buffer };
   web: ProcessedImageOutput & { buffer: Buffer };
+  thumb: ProcessedImageOutput & { buffer: Buffer };
   warnings: string[];
   durationMs: number;
+  timings: ArtworkImageProcessingTimings;
 };
 
 export type ArtworkImageProcessingFailure = {
@@ -72,4 +86,5 @@ export type PlannedFilenamesInput = {
   master: string;
   hr: string;
   web: string;
+  thumb: string;
 };

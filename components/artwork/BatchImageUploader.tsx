@@ -10,6 +10,7 @@ import { formatFileSize } from "@/lib/artwork/validation";
 
 type BatchImageUploaderProps = {
   disabled?: boolean;
+  remainingSlots?: number;
   onFilesSelected: (files: File[]) => void;
   compact?: boolean;
 };
@@ -19,14 +20,17 @@ const ACCEPT =
 
 export function BatchImageUploader({
   disabled,
+  remainingSlots,
   onFilesSelected,
   compact = false,
 }: BatchImageUploaderProps) {
+  const atCapacity = remainingSlots === 0;
+  const blocked = Boolean(disabled || atCapacity);
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
   function takeFiles(list: FileList | File[] | null) {
-    if (!list || disabled) return;
+    if (!list || blocked) return;
     const files = Array.from(list);
     if (files.length === 0) return;
     onFilesSelected(files);
@@ -34,7 +38,7 @@ export function BatchImageUploader({
 
   function onDragOver(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
-    if (!disabled) setDragging(true);
+    if (!blocked) setDragging(true);
   }
 
   function onDragLeave(event: DragEvent<HTMLDivElement>) {
@@ -61,7 +65,7 @@ export function BatchImageUploader({
         dragging
           ? "border-[var(--accent)] bg-[var(--accent-soft)]"
           : "hover:border-[var(--accent)]",
-        disabled ? "opacity-60" : "",
+        blocked ? "opacity-60" : "",
       ].join(" ")}
     >
       <input
@@ -70,7 +74,7 @@ export function BatchImageUploader({
         multiple
         accept={ACCEPT}
         className="sr-only"
-        disabled={disabled}
+        disabled={blocked}
         onChange={(event) => {
           takeFiles(event.target.files);
           event.target.value = "";
@@ -100,23 +104,40 @@ export function BatchImageUploader({
           </p>
           {!compact ? (
             <ul className="mt-4 space-y-1 text-sm text-[var(--ink-soft)]">
-              <li>Suggested working batch: about 10–12 files</li>
+              <li>
+                Up to {MAX_ARTWORKS_PER_BATCH} artworks per batch, subject to
+                the {formatFileSize(MAX_BATCH_BYTES)} total source-size limit
+              </li>
               <li>
                 TIFF, JPEG, or PNG · up to {formatFileSize(MAX_FILE_BYTES)} per
                 file
               </li>
-              <li>
-                Up to {MAX_ARTWORKS_PER_BATCH} artworks ·{" "}
-                {formatFileSize(MAX_BATCH_BYTES)} total
-              </li>
               <li>Files stay on this device until you submit later</li>
+              {atCapacity ? (
+                <li>
+                  This batch already has the maximum of{" "}
+                  {MAX_ARTWORKS_PER_BATCH} artworks
+                </li>
+              ) : remainingSlots != null &&
+                remainingSlots < MAX_ARTWORKS_PER_BATCH ? (
+                <li>
+                  {remainingSlots} more artwork
+                  {remainingSlots === 1 ? "" : "s"} can be added
+                </li>
+              ) : null}
             </ul>
+          ) : remainingSlots != null ? (
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              {atCapacity
+                ? `This batch already has the maximum of ${MAX_ARTWORKS_PER_BATCH} artworks.`
+                : `${remainingSlots} more artwork${remainingSlots === 1 ? "" : "s"} can be added.`}
+            </p>
           ) : null}
         </div>
 
         <button
           type="button"
-          disabled={disabled}
+          disabled={blocked}
           onClick={() => inputRef.current?.click()}
           className={[
             "border border-[var(--ink)] bg-[var(--ink)] text-[var(--paper)] transition hover:bg-[var(--ink-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed",

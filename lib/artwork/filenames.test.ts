@@ -28,6 +28,10 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string) {
   }
 }
 
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+
 const tests: TestCase[] = [
   {
     name: "Blue Garden → PascalCase",
@@ -68,6 +72,18 @@ const tests: TestCase[] = [
         }),
         "2026_KO_1000_BlueGarden_web_01.jpg",
         "web filename",
+      );
+      assertEqual(
+        buildArtworkFilename({
+          year: 2026,
+          inventoryId: 1000,
+          title: "Blue Garden",
+          assetType: "thumb",
+          sequence: 1,
+          extension: ".jpg",
+        }),
+        "2026_KO_1000_BlueGarden_thumb_01.jpg",
+        "thumb filename",
       );
     },
   },
@@ -161,6 +177,7 @@ const tests: TestCase[] = [
           master: "2026_KO_1001_BlueGarden_master_01.jpg",
           hr: "2026_KO_1001_BlueGarden_hr_01.jpg",
           web: "2026_KO_1001_BlueGarden_web_01.jpg",
+          thumb: "2026_KO_1001_BlueGarden_thumb_01.jpg",
           metadata: "1001_metadata.json",
         },
         "single artwork plan",
@@ -211,6 +228,7 @@ const tests: TestCase[] = [
             master: "2026_KO_1000_BlueGarden_master_01.tif",
             hr: "2026_KO_1000_BlueGarden_hr_01.jpg",
             web: "2026_KO_1000_BlueGarden_web_01.jpg",
+            thumb: "2026_KO_1000_BlueGarden_thumb_01.jpg",
             metadata: "1000_metadata.json",
           },
           {
@@ -218,6 +236,7 @@ const tests: TestCase[] = [
             master: "2026_KO_1000_BlueGarden_master_02.jpg",
             hr: "2026_KO_1000_BlueGarden_hr_02.jpg",
             web: "2026_KO_1000_BlueGarden_web_02.jpg",
+            thumb: "2026_KO_1000_BlueGarden_thumb_02.jpg",
             metadata: "1000_metadata.json",
           },
           {
@@ -225,11 +244,50 @@ const tests: TestCase[] = [
             master: "2026_KO_1000_BlueGarden_master_03.png",
             hr: "2026_KO_1000_BlueGarden_hr_03.jpg",
             web: "2026_KO_1000_BlueGarden_web_03.jpg",
+            thumb: "2026_KO_1000_BlueGarden_thumb_03.jpg",
             metadata: "1000_metadata.json",
           },
         ],
         "multi-file plan",
       );
+    },
+  },
+  {
+    name: "Untitled titles use the Untitled filename segment and stay unique by inventory ID",
+    run: () => {
+      assertEqual(sanitizeTitleForFilename("Untitled"), "Untitled", "segment");
+      const first = planFilenamesForArtwork({
+        year: 2026,
+        inventoryId: 1047,
+        title: "Untitled",
+        masterFilename: "scan.tif",
+      });
+      const second = planFilenamesForArtwork({
+        year: 2026,
+        inventoryId: 1048,
+        title: "Untitled",
+        masterFilename: "other.tif",
+      });
+      assertEqual(
+        first.master,
+        "2026_KO_1047_Untitled_master_01.tif",
+        "master 1047",
+      );
+      assertEqual(first.hr, "2026_KO_1047_Untitled_hr_01.jpg", "hr 1047");
+      assertEqual(first.web, "2026_KO_1047_Untitled_web_01.jpg", "web 1047");
+      assertEqual(
+        first.thumb,
+        "2026_KO_1047_Untitled_thumb_01.jpg",
+        "thumb 1047",
+      );
+      assertEqual(
+        second.master,
+        "2026_KO_1048_Untitled_master_01.tif",
+        "master 1048",
+      );
+      assert(first.master !== second.master, "unique via inventory ID");
+      assert(!first.master.includes("Untitled1"), "no Untitled 1");
+      assert(!first.master.includes("Untitled_2026"), "no year suffix");
     },
   },
 ];

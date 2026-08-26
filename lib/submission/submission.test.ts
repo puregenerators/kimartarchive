@@ -1,10 +1,13 @@
 import {
   ARTWORK_INVENTORY_HEADERS,
   ARTWORK_INVENTORY_TAB,
+  artworkInventoryColumnIndex,
   INVENTORY_CLAIMS_HEADERS,
   INVENTORY_CLAIMS_TAB,
 } from "@/lib/google/headers";
+import { buildSheetsImageFormula, isSheetsImageFormula } from "@/lib/google/inventory-thumbnail";
 import { planFilenamesForArtwork } from "@/lib/artwork/filenames";
+import { UNTITLED_TITLE } from "@/lib/artwork/untitled";
 import {
   clearSubmissionAttemptGuardForTests,
   registerSubmissionAttempt,
@@ -25,6 +28,7 @@ import {
   resolveArtworkMetadata,
 } from "@/lib/submission/claim-logic";
 import { buildArtworkInventoryRow } from "@/lib/submission/inventory-row";
+import { MAX_ARTWORKS_PER_BATCH } from "@/lib/artwork/types";
 import { validateSubmissionBatch } from "@/lib/submission/validate-input";
 import {
   ARTWORK_METADATA_SCHEMA_VERSION,
@@ -44,6 +48,14 @@ import {
   failureProgress,
   messageForMasterUploadFailure,
 } from "@/lib/submission/failure-reporting";
+import {
+  emptyIntakeTimings,
+  formatIntakeTimings,
+} from "@/lib/submission/intake-diagnostics";
+import {
+  firstFailedDerivativeUpload,
+  lastCompletedDerivativeUploadStage,
+} from "@/lib/submission/parallel-stages";
 import { GoogleIntegrationError } from "@/lib/google/errors";
 import type { ArtworkSubmissionInput } from "@/lib/submission/types";
 
@@ -229,10 +241,11 @@ const tests: TestCase[] = [
         "2026_KO_2048_BlueGarden_master_01.tif",
         "master permanent",
       );
+      assertEqual(plan.hr, "2026_KO_2048_BlueGarden_hr_01.jpg", "hr permanent");
       assertEqual(
-        plan.hr,
-        "2026_KO_2048_BlueGarden_hr_01.jpg",
-        "hr permanent",
+        plan.thumb,
+        "2026_KO_2048_BlueGarden_thumb_01.jpg",
+        "thumb permanent",
       );
       assertTrue(!plan.master.includes("1000"), "not preview base");
     },
@@ -257,19 +270,25 @@ const tests: TestCase[] = [
           webFileUrl: "https://drive/w",
           artworkFolderUrl: "https://drive/f",
         },
+        thumbnailFormula:
+          '=IMAGE("https://dl.dropboxusercontent.com/scl/fi/thumb.jpg?rlkey=k&raw=1", 1)',
         createdAt: "2026-07-30T12:00:00.000Z",
       });
       assertEqual(row.length, ARTWORK_INVENTORY_HEADERS.length, "column count");
-      assertEqual(ARTWORK_INVENTORY_HEADERS.length, 21, "schema has 21 columns");
-      assertEqual(row[0], "1000", "Inventory ID");
-      assertEqual(row[1], "Blue Garden", "Title");
-      assertEqual(row[3], "Monotype", "Medium");
-      assertEqual(row[8], "Pat", "Photographer after Dimension Unit");
-      assertEqual(row[9], "Show", "Exhibition after Photographer (no Location)");
-      assertEqual(row[12], "m.tif", "Master Filename position");
-      assertEqual(row[13], "https://drive/m", "Master File URL (Drive legacy)");
-      assertEqual(row[18], "https://drive/f", "Artwork Folder URL position");
-      assertEqual(row[19], "2026-07-30T12:00:00.000Z", "Created At");
+      assertEqual(ARTWORK_INVENTORY_HEADERS.length, 22, "schema has 22 columns");
+      assertEqual(row[artworkInventoryColumnIndex("Inventory ID")], "1000", "Inventory ID");
+      assertTrue(
+        isSheetsImageFormula(row[artworkInventoryColumnIndex("Thumbnail")]!),
+        "Thumbnail is IMAGE formula",
+      );
+      assertEqual(row[artworkInventoryColumnIndex("Title")], "Blue Garden", "Title");
+      assertEqual(row[artworkInventoryColumnIndex("Medium")], "Monotype", "Medium");
+      assertEqual(row[artworkInventoryColumnIndex("Photographer")], "Pat", "Photographer after Dimension Unit");
+      assertEqual(row[artworkInventoryColumnIndex("Exhibition")], "Show", "Exhibition after Photographer (no Location)");
+      assertEqual(row[artworkInventoryColumnIndex("Master Filename")], "m.tif", "Master Filename position");
+      assertEqual(row[artworkInventoryColumnIndex("Master File URL")], "https://drive/m", "Master File URL (Drive legacy)");
+      assertEqual(row[artworkInventoryColumnIndex("Artwork Folder URL")], "https://drive/f", "Artwork Folder URL position");
+      assertEqual(row[artworkInventoryColumnIndex("Created At")], "2026-07-30T12:00:00.000Z", "Created At");
     },
   },
   {
@@ -332,6 +351,310 @@ const tests: TestCase[] = [
     },
   },
   {
+    name: "server accepts artworks with blank dimensions",
+    run: () => {
+      const file = new File([new Uint8Array([1, 2, 3])], "a.jpg", {
+        type: "image/jpeg",
+      });
+      const accepted = validateSubmissionBatch({
+        submissionAttemptId: "attempt-dims-optional",
+        shared: {
+          exhibition: "",
+          gallery: "",
+          exhibitionYear: "",
+          photographer: "",
+        },
+        artworks: [sampleArtwork({ height: "", width: "", depth: "" })],
+        files: [{ clientArtworkId: "art-1", file }],
+      });
+      assertEqual(accepted.ok, true, "blank dimensions accepted");
+
+      const rejected = validateSubmissionBatch({
+        submissionAttemptId: "attempt-dims-invalid",
+        shared: {
+          exhibition: "",
+          gallery: "",
+          exhibitionYear: "",
+          photographer: "",
+        },
+        artworks: [sampleArtwork({ height: "0", width: "18" })],
+        files: [{ clientArtworkId: "art-1", file }],
+      });
+      assertEqual(rejected.ok, false, "zero height rejected");
+      if (!rejected.ok) {
+        assertTrue(
+          rejected.message.includes("Height must be a positive number"),
+          "height message",
+        );
+      }
+    },
+  },
+  {
+    name: "server accepts 24 source artworks and rejects 25",
+    run: () => {
+      const shared = {
+        exhibition: "",
+        gallery: "",
+        exhibitionYear: "",
+        photographer: "",
+      };
+      const makeBatch = (count: number) => {
+        const artworks = Array.from({ length: count }, (_, i) =>
+          sampleArtwork({
+            clientArtworkId: `art-${i + 1}`,
+            order: i,
+            originalFilename: `a${i + 1}.jpg`,
+          }),
+        );
+        const files = artworks.map((artwork, i) => ({
+          clientArtworkId: artwork.clientArtworkId,
+          file: new File([new Uint8Array([1, 2, 3])], `a${i + 1}.jpg`, {
+            type: "image/jpeg",
+          }),
+        }));
+        return { artworks, files };
+      };
+
+      const atCap = makeBatch(MAX_ARTWORKS_PER_BATCH);
+      const accepted = validateSubmissionBatch({
+        submissionAttemptId: "attempt-count-24",
+        shared,
+        artworks: atCap.artworks,
+        files: atCap.files,
+      });
+      assertEqual(accepted.ok, true, "24 accepted");
+
+      const over = makeBatch(MAX_ARTWORKS_PER_BATCH + 1);
+      const rejected = validateSubmissionBatch({
+        submissionAttemptId: "attempt-count-25",
+        shared,
+        artworks: over.artworks,
+        files: over.files,
+      });
+      assertEqual(rejected.ok, false, "25 rejected");
+      if (!rejected.ok) {
+        assertTrue(
+          rejected.message.includes(String(MAX_ARTWORKS_PER_BATCH)),
+          "uses shared artwork cap",
+        );
+      }
+    },
+  },
+  {
+    name: "server resolves isUntitled to Untitled and rejects blank titles without the flag",
+    run: () => {
+      const file = new File([new Uint8Array([1, 2, 3])], "a.jpg", {
+        type: "image/jpeg",
+      });
+      const blankRejected = validateSubmissionBatch({
+        submissionAttemptId: "attempt-title-blank",
+        shared: {
+          exhibition: "",
+          gallery: "",
+          exhibitionYear: "",
+          photographer: "",
+        },
+        artworks: [sampleArtwork({ title: "" })],
+        files: [{ clientArtworkId: "art-1", file }],
+      });
+      assertEqual(blankRejected.ok, false, "blank title rejected");
+      if (!blankRejected.ok) {
+        assertTrue(
+          blankRejected.message.includes("Title is required"),
+          "blank message",
+        );
+      }
+
+      const whitespaceRejected = validateSubmissionBatch({
+        submissionAttemptId: "attempt-title-ws",
+        shared: {
+          exhibition: "",
+          gallery: "",
+          exhibitionYear: "",
+          photographer: "",
+        },
+        artworks: [sampleArtwork({ title: "   ", isUntitled: false })],
+        files: [{ clientArtworkId: "art-1", file }],
+      });
+      assertEqual(whitespaceRejected.ok, false, "whitespace title rejected");
+
+      const untitledAccepted = validateSubmissionBatch({
+        submissionAttemptId: "attempt-title-untitled",
+        shared: {
+          exhibition: "",
+          gallery: "",
+          exhibitionYear: "",
+          photographer: "",
+        },
+        artworks: [sampleArtwork({ title: "Blue Garden", isUntitled: true })],
+        files: [{ clientArtworkId: "art-1", file }],
+      });
+      assertEqual(untitledAccepted.ok, true, "isUntitled accepted");
+      if (untitledAccepted.ok) {
+        assertEqual(
+          untitledAccepted.input.artworks[0]!.title,
+          UNTITLED_TITLE,
+          "resolved to Untitled",
+        );
+        assertEqual(
+          Object.prototype.hasOwnProperty.call(
+            untitledAccepted.input.artworks[0]!,
+            "isUntitled",
+          ),
+          false,
+          "isUntitled stripped from validated input",
+        );
+      }
+
+      const emptyFlagAccepted = validateSubmissionBatch({
+        submissionAttemptId: "attempt-title-empty-flag",
+        shared: {
+          exhibition: "",
+          gallery: "",
+          exhibitionYear: "",
+          photographer: "",
+        },
+        artworks: [sampleArtwork({ title: "", isUntitled: true })],
+        files: [{ clientArtworkId: "art-1", file }],
+      });
+      assertEqual(emptyFlagAccepted.ok, true, "empty + isUntitled accepted");
+      if (emptyFlagAccepted.ok) {
+        assertEqual(
+          emptyFlagAccepted.input.artworks[0]!.title,
+          UNTITLED_TITLE,
+          "empty flag resolves Untitled",
+        );
+      }
+
+      const literalAccepted = validateSubmissionBatch({
+        submissionAttemptId: "attempt-title-literal",
+        shared: {
+          exhibition: "",
+          gallery: "",
+          exhibitionYear: "",
+          photographer: "",
+        },
+        artworks: [sampleArtwork({ title: "Untitled" })],
+        files: [{ clientArtworkId: "art-1", file }],
+      });
+      assertEqual(literalAccepted.ok, true, "literal Untitled without flag");
+      if (literalAccepted.ok) {
+        assertEqual(
+          literalAccepted.input.artworks[0]!.title,
+          UNTITLED_TITLE,
+          "literal title kept",
+        );
+      }
+    },
+  },
+  {
+    name: "untitled works write Untitled into Title and do not add a Sheet column",
+    run: () => {
+      const fileA = new File([new Uint8Array([1, 2, 3])], "a.tif", {
+        type: "image/tiff",
+      });
+      const fileB = new File([new Uint8Array([1, 2, 3])], "b.tif", {
+        type: "image/tiff",
+      });
+      const accepted = validateSubmissionBatch({
+        submissionAttemptId: "attempt-untitled-batch",
+        shared: {
+          exhibition: "Show",
+          gallery: "Venue",
+          exhibitionYear: "2026",
+          photographer: "Pat",
+        },
+        artworks: [
+          sampleArtwork({
+            clientArtworkId: "art-1",
+            order: 0,
+            title: "",
+            isUntitled: true,
+            originalFilename: "a.tif",
+          }),
+          sampleArtwork({
+            clientArtworkId: "art-2",
+            order: 1,
+            title: "Garden Study",
+            isUntitled: true,
+            originalFilename: "b.tif",
+          }),
+        ],
+        files: [
+          { clientArtworkId: "art-1", file: fileA },
+          { clientArtworkId: "art-2", file: fileB },
+        ],
+      });
+      assertEqual(accepted.ok, true, "batch accepted");
+      if (!accepted.ok) return;
+
+      assertEqual(accepted.input.artworks[0]!.title, UNTITLED_TITLE, "first title");
+      assertEqual(accepted.input.artworks[1]!.title, UNTITLED_TITLE, "second title");
+
+      const metadataA = resolveArtworkMetadata(accepted.input.artworks[0]!, {
+        exhibition: "Show",
+        gallery: "Venue",
+        photographer: "Pat",
+      });
+      const metadataB = resolveArtworkMetadata(accepted.input.artworks[1]!, {
+        exhibition: "Show",
+        gallery: "Venue",
+        photographer: "Pat",
+      });
+      assertEqual(metadataA.title, UNTITLED_TITLE, "resolved A");
+      assertEqual(metadataB.title, UNTITLED_TITLE, "resolved B");
+
+      const rowA = buildArtworkInventoryRow({
+        inventoryId: 1047,
+        metadata: metadataA,
+        links: {
+          masterFilename: "2026_KO_1047_Untitled_master_01.tif",
+          masterFileUrl: "https://drive/m1",
+          hrFilename: "2026_KO_1047_Untitled_hr_01.jpg",
+          hrFileUrl: "https://drive/h1",
+          webFilename: "2026_KO_1047_Untitled_web_01.jpg",
+          webFileUrl: "https://drive/w1",
+          artworkFolderUrl: "https://drive/f1",
+        },
+        thumbnailFormula:
+          '=IMAGE("https://dl.dropboxusercontent.com/scl/fi/thumb.jpg?rlkey=k&raw=1", 1)',
+        createdAt: "2026-08-19T12:00:00.000Z",
+      });
+      const rowB = buildArtworkInventoryRow({
+        inventoryId: 1048,
+        metadata: metadataB,
+        links: {
+          masterFilename: "2026_KO_1048_Untitled_master_01.tif",
+          masterFileUrl: "https://drive/m2",
+          hrFilename: "2026_KO_1048_Untitled_hr_01.jpg",
+          hrFileUrl: "https://drive/h2",
+          webFilename: "2026_KO_1048_Untitled_web_01.jpg",
+          webFileUrl: "https://drive/w2",
+          artworkFolderUrl: "https://drive/f2",
+        },
+        thumbnailFormula:
+          '=IMAGE("https://dl.dropboxusercontent.com/scl/fi/thumb.jpg?rlkey=k&raw=1", 1)',
+        createdAt: "2026-08-19T12:00:00.000Z",
+      });
+      assertEqual(rowA[artworkInventoryColumnIndex("Title")], UNTITLED_TITLE, "sheet title A");
+      assertEqual(rowB[artworkInventoryColumnIndex("Title")], UNTITLED_TITLE, "sheet title B");
+      assertEqual(rowA[0], "1047", "inventory A");
+      assertEqual(rowB[0], "1048", "inventory B");
+      assertEqual(rowA.length, ARTWORK_INVENTORY_HEADERS.length, "width A");
+      assertEqual(rowB.length, ARTWORK_INVENTORY_HEADERS.length, "width B");
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS.includes("Missing Title" as never),
+        false,
+        "no Missing Title header",
+      );
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS.includes("isUntitled" as never),
+        false,
+        "no isUntitled header",
+      );
+    },
+  },
+  {
     name: "resolved custom medium writes a single Sheet Medium column",
     run: () => {
       const metadata = resolveArtworkMetadata(
@@ -354,9 +677,11 @@ const tests: TestCase[] = [
           webFileUrl: "https://drive/w",
           artworkFolderUrl: "https://drive/f",
         },
+        thumbnailFormula:
+          '=IMAGE("https://dl.dropboxusercontent.com/scl/fi/thumb.jpg?rlkey=k&raw=1", 1)',
         createdAt: "2026-07-30T12:00:00.000Z",
       });
-      assertEqual(row[3], "Mixed media", "Medium value");
+      assertEqual(row[artworkInventoryColumnIndex("Medium")], "Mixed media", "Medium value");
       assertEqual(row.length, ARTWORK_INVENTORY_HEADERS.length, "unchanged width");
       assertEqual(
         ARTWORK_INVENTORY_HEADERS.filter((h) => /medium/i.test(h)).length,
@@ -385,18 +710,20 @@ const tests: TestCase[] = [
           webFileUrl: "https://www.dropbox.com/s/web?dl=0",
           artworkFolderUrl: "https://www.dropbox.com/scl/fo/folder?dl=0",
         },
+        thumbnailFormula:
+          '=IMAGE("https://dl.dropboxusercontent.com/scl/fi/thumb.jpg?rlkey=k&raw=1", 1)',
         createdAt: "2026-07-30T12:00:00.000Z",
       });
-      assertEqual(row[13], "https://www.dropbox.com/s/master?dl=0", "Master File URL");
-      assertEqual(row[15], "https://www.dropbox.com/s/hr?dl=0", "HR File URL");
-      assertEqual(row[17], "https://www.dropbox.com/s/web?dl=0", "Web File URL");
+      assertEqual(row[artworkInventoryColumnIndex("Master File URL")], "https://www.dropbox.com/s/master?dl=0", "Master File URL");
+      assertEqual(row[artworkInventoryColumnIndex("High Resolution File URL")], "https://www.dropbox.com/s/hr?dl=0", "HR File URL");
+      assertEqual(row[artworkInventoryColumnIndex("Web File URL")], "https://www.dropbox.com/s/web?dl=0", "Web File URL");
       assertEqual(
-        row[18],
+        row[artworkInventoryColumnIndex("Artwork Folder URL")],
         "https://www.dropbox.com/scl/fo/folder?dl=0",
         "Artwork Folder URL",
       );
-      assertEqual(ARTWORK_INVENTORY_HEADERS[13], "Master File URL", "header name");
-      assertEqual(ARTWORK_INVENTORY_HEADERS[18], "Artwork Folder URL", "folder header");
+      assertEqual(ARTWORK_INVENTORY_HEADERS[artworkInventoryColumnIndex("Master File URL")], "Master File URL", "header name");
+      assertEqual(ARTWORK_INVENTORY_HEADERS[artworkInventoryColumnIndex("Artwork Folder URL")], "Artwork Folder URL", "folder header");
     },
   },
   {
@@ -421,12 +748,14 @@ const tests: TestCase[] = [
           webFileUrl: "u3",
           artworkFolderUrl: "u4",
         },
+        thumbnailFormula:
+          '=IMAGE("https://dl.dropboxusercontent.com/scl/fi/thumb.jpg?rlkey=k&raw=1", 1)',
         createdAt: "2026-07-30T12:00:00.000Z",
       });
-      assertEqual(row[6], "", "Depth blank");
-      assertEqual(row[8], "", "Photographer blank");
-      assertEqual(row[9], "", "Exhibition blank");
-      assertEqual(row[11], "", "Notes blank");
+      assertEqual(row[artworkInventoryColumnIndex("Depth")], "", "Depth blank");
+      assertEqual(row[artworkInventoryColumnIndex("Photographer")], "", "Photographer blank");
+      assertEqual(row[artworkInventoryColumnIndex("Exhibition")], "", "Exhibition blank");
+      assertEqual(row[artworkInventoryColumnIndex("Notes")], "", "Notes blank");
       assertEqual(
         ARTWORK_INVENTORY_HEADERS.includes("Location" as never),
         false,
@@ -458,22 +787,35 @@ const tests: TestCase[] = [
         master: true,
         hr: true,
         web: true,
+        thumb: false,
         metadata: false,
       };
       const mayAppend =
         uploadsComplete.master &&
         uploadsComplete.hr &&
         uploadsComplete.web &&
+        uploadsComplete.thumb &&
         uploadsComplete.metadata;
-      assertEqual(mayAppend, false, "blocked until metadata uploaded");
+      assertEqual(mayAppend, false, "blocked until thumbnail and metadata uploaded");
+      uploadsComplete.thumb = true;
+      assertEqual(
+        uploadsComplete.master &&
+          uploadsComplete.hr &&
+          uploadsComplete.web &&
+          uploadsComplete.thumb &&
+          uploadsComplete.metadata,
+        false,
+        "still blocked until metadata",
+      );
       uploadsComplete.metadata = true;
       assertEqual(
         uploadsComplete.master &&
           uploadsComplete.hr &&
           uploadsComplete.web &&
+          uploadsComplete.thumb &&
           uploadsComplete.metadata,
         true,
-        "allowed after images + metadata",
+        "allowed after images + thumbnail + metadata",
       );
     },
   },
@@ -509,6 +851,11 @@ const tests: TestCase[] = [
           id: "w1",
           name: "2026_KO_1000_BlueGarden_web_01.jpg",
           webViewLink: "https://www.dropbox.com/s/web?dl=0",
+        },
+        thumb: {
+          id: "t1",
+          name: "2026_KO_1000_BlueGarden_thumb_01.jpg",
+          webViewLink: "https://www.dropbox.com/s/thumb?dl=0",
         },
         folder: {
           id: "f1",
@@ -577,6 +924,11 @@ const tests: TestCase[] = [
         "web url",
       );
       assertEqual(
+        portable.files.thumbnail.filename,
+        "2026_KO_1000_BlueGarden_thumb_01.jpg",
+        "thumb filename",
+      );
+      assertEqual(
         portable.files.metadata.filename,
         "1000_metadata.json",
         "metadata filename in files",
@@ -622,6 +974,7 @@ const tests: TestCase[] = [
         master: { id: "m", name: "a.tif", webViewLink: "u1" },
         hr: { id: "h", name: "b.jpg", webViewLink: "u2" },
         web: { id: "w", name: "c.jpg", webViewLink: "u3" },
+        thumb: { id: "t", name: "d.jpg", webViewLink: "u5" },
         folder: { id: "f", name: "folder", webViewLink: "u4" },
         metadataFilename: buildArtworkMetadataFilename(1001),
         createdAt: "2026-07-30T12:00:00.000Z",
@@ -649,23 +1002,24 @@ const tests: TestCase[] = [
     run: () => {
       const failure = {
         ok: false as const,
-        lastCompletedStage: "web_uploaded" as const,
+        lastCompletedStage: "thumb_uploaded" as const,
         failedOperation: "upload_metadata" as const,
         sheetRowWritten: false,
         message:
-          "The master, high-resolution, and web images uploaded successfully, but 1105_metadata.json could not be created or uploaded.",
+          "The master, high-resolution, web, and thumbnail images uploaded successfully, but 1105_metadata.json could not be created or uploaded.",
         preserved: {
           inventoryId: 1105,
           folder: true,
           master: true,
           hr: true,
           web: true,
+          thumb: true,
           metadata: false,
         },
       };
       assertEqual(failure.sheetRowWritten, false, "no sheet row");
       assertEqual(failure.failedOperation, "upload_metadata", "failed op");
-      assertEqual(failure.lastCompletedStage, "web_uploaded", "last stage");
+      assertEqual(failure.lastCompletedStage, "thumb_uploaded", "last stage");
       assertEqual(failure.preserved.inventoryId, 1105, "ID preserved");
       assertEqual(failure.preserved.folder, true, "folder preserved");
       assertEqual(failure.preserved.master, true, "master preserved");
@@ -686,6 +1040,7 @@ const tests: TestCase[] = [
         master: { id: "m", name: "m.tif", webViewLink: "https://m" },
         hr: { id: "h", name: "h.jpg", webViewLink: "https://h" },
         web: { id: "w", name: "w.jpg", webViewLink: "https://w" },
+        thumb: { id: "t", name: "t.jpg", webViewLink: "https://t" },
         folder: { id: "f", name: "folder", webViewLink: "https://f" },
         metadataFilename,
         createdAt: "2026-07-30T12:00:00.000Z",
@@ -1098,6 +1453,7 @@ const tests: TestCase[] = [
           orderMismatch: false,
         },
         canInitializeHeaders: false,
+        canInsertThumbnailColumn: false,
       };
 
       const mockSheetDeps = {
@@ -1281,6 +1637,65 @@ const tests: TestCase[] = [
     },
   },
   {
+    name: "Thumbnail column is IMAGE formula only — no filename or URL metadata columns",
+    run: () => {
+      const metadata = resolveArtworkMetadata(sampleArtwork(), {
+        exhibition: "",
+        gallery: "",
+        photographer: "Pat",
+      });
+      const directUrl =
+        "https://dl.dropboxusercontent.com/scl/fi/abc/2026_KO_1000_BlueGarden_thumb_01.jpg?rlkey=k&raw=1";
+      const formula = buildSheetsImageFormula(directUrl);
+      const row = buildArtworkInventoryRow({
+        inventoryId: 1000,
+        metadata,
+        links: {
+          masterFilename: "m.tif",
+          masterFileUrl: "https://www.dropbox.com/s/master?dl=0",
+          hrFilename: "h.jpg",
+          hrFileUrl: "https://www.dropbox.com/s/hr?dl=0",
+          webFilename: "w.jpg",
+          webFileUrl: "https://www.dropbox.com/s/web?dl=0",
+          artworkFolderUrl: "https://www.dropbox.com/scl/fo/folder?dl=0",
+        },
+        thumbnailFormula: formula,
+        createdAt: "2026-07-30T12:00:00.000Z",
+      });
+      assertEqual(ARTWORK_INVENTORY_HEADERS[0], "Inventory ID", "ID first");
+      assertEqual(ARTWORK_INVENTORY_HEADERS[1], "Thumbnail", "Thumbnail second");
+      assertEqual(ARTWORK_INVENTORY_HEADERS[2], "Title", "Title third");
+      assertEqual(row[1], formula, "formula in Thumbnail cell");
+      assertTrue(isSheetsImageFormula(row[1]!), "IMAGE()");
+      assertTrue(row[1]!.includes(directUrl), "direct URL inside formula");
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS.includes("Thumbnail Filename" as never),
+        false,
+        "no Thumbnail Filename",
+      );
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS.includes("Thumbnail URL" as never),
+        false,
+        "no Thumbnail URL",
+      );
+      assertEqual(
+        ARTWORK_INVENTORY_HEADERS.includes("Thumbnail Dropbox URL" as never),
+        false,
+        "no Thumbnail Dropbox URL",
+      );
+      assertEqual(
+        row[artworkInventoryColumnIndex("Title")],
+        "Blue Garden",
+        "Title still maps correctly",
+      );
+      assertEqual(
+        row[artworkInventoryColumnIndex("Master Filename")],
+        "m.tif",
+        "Master Filename still maps correctly",
+      );
+    },
+  },
+  {
     name: "upload failure after folder creation reports folder_created + upload_master",
     run: () => {
       const progress = failureProgress({
@@ -1295,6 +1710,73 @@ const tests: TestCase[] = [
         false,
         "never claims master_uploaded",
       );
+    },
+  },
+  {
+    name: "thumbnail generation and upload failures report distinct operations",
+    run: () => {
+      const generate = failureProgress({
+        lastCompletedStage: "master_uploaded",
+        failedOperation: "generate_thumbnail",
+      });
+      assertEqual(generate.lastCompletedStage, "master_uploaded", "gen last");
+      assertEqual(generate.failedOperation, "generate_thumbnail", "gen op");
+      const upload = failureProgress({
+        lastCompletedStage: "web_uploaded",
+        failedOperation: "upload_thumb",
+      });
+      assertEqual(upload.lastCompletedStage, "web_uploaded", "upload last");
+      assertEqual(upload.failedOperation, "upload_thumb", "upload op");
+      assertEqual(upload.stage === "thumb_uploaded", false, "not thumb_uploaded");
+    },
+  },
+  {
+    name: "concurrent derivative upload failures report the earliest operation",
+    run: () => {
+      const both = firstFailedDerivativeUpload({
+        hr: new Error("hr"),
+        web: new Error("web"),
+        thumb: new Error("thumb"),
+      });
+      assertEqual(both?.operation, "upload_hr", "hr first");
+      const thumbOnly = firstFailedDerivativeUpload({
+        thumb: new Error("thumb"),
+      });
+      assertEqual(thumbOnly?.operation, "upload_thumb", "thumb only");
+      assertEqual(
+        lastCompletedDerivativeUploadStage({
+          hr: true,
+          web: true,
+          thumb: false,
+          previous: "derivatives_generated",
+        }),
+        "web_uploaded",
+        "thumb fail after hr+web",
+      );
+      assertEqual(
+        lastCompletedDerivativeUploadStage({
+          hr: false,
+          web: true,
+          thumb: true,
+          previous: "derivatives_generated",
+        }),
+        "derivatives_generated",
+        "hr fail keeps previous",
+      );
+    },
+  },
+  {
+    name: "intake timing log line includes all major stages",
+    run: () => {
+      const line = formatIntakeTimings(emptyIntakeTimings());
+      assertTrue(line.includes("master_read_decode="), "decode");
+      assertTrue(line.includes("hr_generation="), "hr");
+      assertTrue(line.includes("web_generation="), "web");
+      assertTrue(line.includes("thumbnail_generation="), "thumb");
+      assertTrue(line.includes("dropbox_master_upload="), "master upload");
+      assertTrue(line.includes("dropbox_derivative_uploads="), "deriv uploads");
+      assertTrue(line.includes("sheets_append="), "sheets");
+      assertTrue(line.includes("total_intake="), "total");
     },
   },
   {

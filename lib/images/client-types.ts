@@ -1,4 +1,7 @@
-import type { ArtworkSourceMetadata } from "@/lib/images/types";
+import type {
+  ArtworkImageProcessingTimings,
+  ArtworkSourceMetadata,
+} from "@/lib/images/types";
 
 export type ClientProcessedDerivative = {
   filename: string;
@@ -35,6 +38,7 @@ export type ArtworkProcessingSuccess = {
   };
   hr: ClientProcessedDerivative;
   web: ClientProcessedDerivative;
+  thumb: ClientProcessedDerivative;
   comparisons: ClientProcessingComparisons;
 };
 
@@ -60,11 +64,13 @@ export type ProcessArtworkImageApiSuccess = {
   resultId: string;
   expiresAt: number;
   durationMs: number;
+  timings: ArtworkImageProcessingTimings;
   warnings: string[];
   source: ArtworkSourceMetadata;
   master: ArtworkProcessingSuccess["master"];
   hr: ClientProcessedDerivative;
   web: ClientProcessedDerivative;
+  thumb: ClientProcessedDerivative;
   comparisons: ClientProcessingComparisons;
 };
 

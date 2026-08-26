@@ -22,6 +22,7 @@ export const ARTWORK_SUBMISSION_STAGES = [
   "derivatives_generated",
   "hr_uploaded",
   "web_uploaded",
+  "thumb_uploaded",
   "metadata_uploaded",
   "sheet_row_appended",
   "completed",
@@ -38,8 +39,10 @@ export const SUBMISSION_FAILED_OPERATIONS = [
   "create_folder",
   "upload_master",
   "generate_derivatives",
+  "generate_thumbnail",
   "upload_hr",
   "upload_web",
+  "upload_thumb",
   "upload_metadata",
   "append_inventory_row",
   "mark_claim_completed",
@@ -84,6 +87,11 @@ export type ArtworkSubmissionInput = {
   /** Zero-based order within the batch. */
   order: number;
   title: string;
+  /**
+   * Transient client flag for unknown/missing titles. Never a Sheet column.
+   * When true, the server resolves Title to exactly `Untitled`.
+   */
+  isUntitled?: boolean;
   year: string;
   medium: string;
   height: string;
@@ -156,6 +164,7 @@ export type ArtworkSubmissionBase = {
   master: DriveResourceRef | null;
   hr: DriveResourceRef | null;
   web: DriveResourceRef | null;
+  thumb: DriveResourceRef | null;
   metadata: DriveResourceRef | null;
   sheetRowWritten: boolean;
   claimStatus: ClaimStatus | null;
@@ -173,6 +182,7 @@ export type ArtworkSubmissionSuccess = ArtworkSubmissionBase & {
   master: DriveResourceRef;
   hr: DriveResourceRef;
   web: DriveResourceRef;
+  thumb: DriveResourceRef;
   metadata: DriveResourceRef;
   sheetRowWritten: true;
   reconciliationWarnings: ReconciliationWarning[];

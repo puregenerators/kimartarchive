@@ -1,4 +1,7 @@
-import { ARTWORK_INVENTORY_HEADERS } from "@/lib/google/headers";
+import {
+  ARTWORK_INVENTORY_HEADERS,
+  type ArtworkInventoryHeader,
+} from "@/lib/google/headers";
 import { sheetCompatibleNumber } from "@/lib/submission/claim-logic";
 import type { ResolvedArtworkMetadata } from "@/lib/submission/types";
 
@@ -16,25 +19,26 @@ export type InventoryRowFileLinks = {
 /** @deprecated Use InventoryRowFileLinks — kept as an alias for call-site clarity. */
 export type InventoryRowDriveLinks = InventoryRowFileLinks;
 
-type InventoryHeader = (typeof ARTWORK_INVENTORY_HEADERS)[number];
-
 /**
  * Build one Artwork Inventory row in exact expected header order.
  * Blank optional values remain blank. Never relies on object key iteration.
  * Drive and Dropbox both write into the same neutral URL columns.
+ * Thumbnail is a display formula only — not filename/URL metadata.
  */
 export function buildArtworkInventoryRow(params: {
   inventoryId: number;
   metadata: ResolvedArtworkMetadata;
   links: InventoryRowFileLinks;
+  thumbnailFormula: string;
   createdAt: string;
   updatedAt?: string;
 }): string[] {
   const { inventoryId, metadata, links } = params;
   const updatedAt = params.updatedAt ?? params.createdAt;
 
-  const byHeader: Record<InventoryHeader, string | number> = {
+  const byHeader: Record<ArtworkInventoryHeader, string | number> = {
     "Inventory ID": inventoryId,
+    Thumbnail: params.thumbnailFormula,
     Title: metadata.title,
     Year: metadata.year,
     Medium: metadata.medium,

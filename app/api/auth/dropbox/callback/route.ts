@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
+import { unauthorizedBrowserRedirect } from "@/lib/auth/access";
 import { persistOAuthConnection, getCurrentAccount } from "@/lib/dropbox/client";
 import { validateDropboxEnv } from "@/lib/dropbox/env";
 import { DropboxIntegrationError } from "@/lib/dropbox/errors";
@@ -44,6 +45,9 @@ function setupRedirect(params: Record<string, string>): NextResponse {
  * Never puts tokens in the redirect URL or logs them.
  */
 export async function GET(request: Request) {
+  const denied = await unauthorizedBrowserRedirect(request);
+  if (denied) return denied;
+
   const requestUrl = new URL(request.url);
   const errorParam = requestUrl.searchParams.get("error");
   const code = requestUrl.searchParams.get("code");

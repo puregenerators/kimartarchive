@@ -460,6 +460,8 @@ const tests: TestCase[] = [
           webFileUrl: "https://example.com/w",
           artworkFolderUrl: "https://example.com/folder",
         },
+        thumbnailFormula:
+          '=IMAGE("https://dl.dropboxusercontent.com/scl/fi/thumb.jpg?rlkey=k&raw=1", 1)',
         createdAt: "2026-08-03T12:00:00.000Z",
       });
       const rowText = row.join("|");

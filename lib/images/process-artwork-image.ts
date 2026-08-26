@@ -3,8 +3,10 @@ import "server-only";
 export {
   generateHrJpegBuffer,
   generateWebJpegBuffer,
+  generateThumbJpegBuffer,
   mapSharpFormatToSupported,
   normalizeMasterExtensionForPlan,
+  orientedPixelSize,
   processArtworkImage,
   readArtworkSourceMetadata,
   validateArtworkSourceImage,

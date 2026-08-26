@@ -1,1 +1,33 @@
-# kimartarchive
+# Kim Artwork Archive
+
+Private intake and browse app for the Kim Artwork Archive.
+
+**Authoritative systems**
+
+- **Google Sheets** (`Artwork Inventory`) — artwork metadata
+- **Dropbox** — permanent artwork files
+
+The app is not a database. Successful intake writes a Sheet row; `/artworks` reads that Sheet on every load.
+
+## App routes
+
+| Route | Purpose |
+| --- | --- |
+| `/artworks` | Visual, read-only artwork archive |
+| `/artworks/[inventoryId]` | Read-only artwork detail |
+| `/new-artwork` | New artwork batch intake |
+| `/setup/archive` | Google Sheets + Dropbox setup |
+| `/login` | Shared-password gate |
+
+The app is private. `APP_ACCESS_PASSWORD` must be set; production fails closed if it is missing. After login, a secure HTTP-only cookie remembers access. Pages, APIs, and server actions all verify that session independently.
+
+Large TIFF intake is **not** production-ready on Vercel. Masters still pass through a Function request body (4.5 MB hard limit). See `docs/SUBMISSION_PIPELINE.md`.
+
+## Docs
+
+- [Artwork Archive](docs/ARTWORK_ARCHIVE.md)
+- [Artwork Intake Spec](docs/ARTWORK_INTAKE_SPEC.md)
+- [Submission Pipeline](docs/SUBMISSION_PIPELINE.md)
+- [Google Setup](docs/GOOGLE_SETUP.md)
+- [Dropbox Setup](docs/DROPBOX_SETUP.md)
+- [Image Processing](docs/IMAGE_PROCESSING.md)

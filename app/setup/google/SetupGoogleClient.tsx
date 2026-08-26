@@ -5,6 +5,7 @@ import { useState, useTransition, type ReactNode } from "react";
 import {
   createFailedIntakeFolderAction,
   initializeSheetHeadersAction,
+  insertThumbnailColumnAction,
   type SetupActionResult,
 } from "@/app/setup/google/actions";
 import type { GoogleDiagnostics } from "@/lib/google/diagnostic-types";
@@ -74,6 +75,7 @@ export function SetupGoogleClient({ initialDiagnostics }: SetupGoogleClientProps
     null,
   );
   const [confirmFailedIntake, setConfirmFailedIntake] = useState(false);
+  const [confirmThumbnailColumn, setConfirmThumbnailColumn] = useState(false);
 
   function refresh() {
     startTransition(() => {
@@ -90,6 +92,15 @@ export function SetupGoogleClient({ initialDiagnostics }: SetupGoogleClientProps
       );
       setMessage(result);
       setConfirmHeadersTab(null);
+      router.refresh();
+    });
+  }
+
+  function runInsertThumbnailColumn() {
+    startTransition(async () => {
+      const result = await insertThumbnailColumnAction("INSERT_THUMBNAIL_COLUMN");
+      setMessage(result);
+      setConfirmThumbnailColumn(false);
       router.refresh();
     });
   }
@@ -367,6 +378,59 @@ export function SetupGoogleClient({ initialDiagnostics }: SetupGoogleClientProps
                 </div>
               );
             })}
+            {sheets.artworkInventory?.canInsertThumbnailColumn ? (
+              <div className="border border-[var(--line)] p-3">
+                <p className="text-sm font-medium text-[var(--ink)]">
+                  Insert Thumbnail column · {ARTWORK_INVENTORY_TAB}
+                </p>
+                <p className="mt-1 text-xs text-[var(--muted)]">
+                  Adds a display-only Thumbnail column after Inventory ID.
+                  Existing rows shift right and stay aligned. Does not generate
+                  thumbnails for past artworks.
+                </p>
+                {confirmThumbnailColumn ? (
+                  <div className="mt-3 space-y-2 bg-[var(--accent-soft)] p-3">
+                    <p className="text-sm text-[var(--ink)]">
+                      Confirm inserting the Thumbnail column. Intake will fail
+                      closed until this schema matches.
+                    </p>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        disabled={pending || !sheetsHasEditor}
+                        onClick={runInsertThumbnailColumn}
+                        className="border border-[var(--ink)] bg-[var(--ink)] px-3 py-2 text-xs uppercase tracking-[0.12em] text-[var(--paper)] disabled:opacity-40"
+                      >
+                        Confirm insert Thumbnail column
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmThumbnailColumn(false)}
+                        className="px-3 py-2 text-xs uppercase tracking-[0.12em] text-[var(--muted)]"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={pending || !sheetsHasEditor}
+                    onClick={() => setConfirmThumbnailColumn(true)}
+                    className="mt-3 border border-[var(--line)] bg-[var(--surface-elevated)] px-3 py-2 text-xs uppercase tracking-[0.12em] text-[var(--ink)] disabled:opacity-40"
+                  >
+                    {sheetsHasEditor
+                      ? "Prepare Thumbnail column…"
+                      : "Unavailable"}
+                  </button>
+                )}
+                {!sheetsHasEditor ? (
+                  <p className="mt-2 text-xs text-[var(--muted)]">
+                    {sheetsEditorBlockReason}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </Card>

@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { ArchiveSetupClient } from "@/app/setup/archive/SetupArchiveClient";
+import { requireAuthenticatedPage } from "@/lib/auth/access";
 import { runDropboxDiagnostics } from "@/lib/dropbox/health";
 import { buildArchiveOverallStatus } from "@/lib/dropbox/status";
 import { runGoogleDiagnostics } from "@/lib/google/diagnostics";
@@ -24,6 +25,7 @@ export default async function SetupArchivePage({
 }: {
   searchParams: SearchParams;
 }) {
+  await requireAuthenticatedPage();
   const params = await searchParams;
   const [google, dropbox] = await Promise.all([
     runGoogleDiagnostics(),

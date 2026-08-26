@@ -14,6 +14,8 @@ type SharedDetailsSectionProps = {
     value: BatchSharedDetails[K],
   ) => void;
   onRequestApply: () => void;
+  /** Hide Apply until at least one artwork exists. */
+  canApply?: boolean;
 };
 
 const inputClass =
@@ -58,6 +60,7 @@ export function SharedDetailsSection({
   shared,
   onChange,
   onRequestApply,
+  canApply = true,
 }: SharedDetailsSectionProps) {
   return (
     <section
@@ -78,19 +81,23 @@ export function SharedDetailsSection({
             artwork edits are not changed until you apply shared details.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onRequestApply}
-          className="shrink-0 self-start border border-[var(--line)] bg-[var(--surface-elevated)] px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--ink)] transition hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
-        >
-          Apply shared details to all
-        </button>
+        {canApply ? (
+          <button
+            type="button"
+            onClick={onRequestApply}
+            className="shrink-0 self-start border border-[var(--line)] bg-[var(--surface-elevated)] px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--ink)] transition hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+          >
+            Apply shared details to all
+          </button>
+        ) : null}
       </div>
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Field id="exhibition" label="Exhibition">
           <input
             id="exhibition"
+            name="exhibition"
+            autoComplete="off"
             value={shared.exhibition}
             onChange={(e) => onChange("exhibition", e.target.value)}
             className={inputClass}
@@ -99,6 +106,8 @@ export function SharedDetailsSection({
         <Field id="gallery" label="Gallery / Venue">
           <input
             id="gallery"
+            name="gallery"
+            autoComplete="off"
             value={shared.gallery}
             onChange={(e) => onChange("gallery", e.target.value)}
             className={inputClass}
@@ -107,6 +116,8 @@ export function SharedDetailsSection({
         <Field id="exhibitionYear" label="Exhibition Year">
           <input
             id="exhibitionYear"
+            name="exhibitionYear"
+            autoComplete="off"
             inputMode="numeric"
             placeholder="2026"
             value={shared.exhibitionYear}
@@ -117,6 +128,8 @@ export function SharedDetailsSection({
         <Field id="defaultArtworkYear" label="Default Artwork Year">
           <input
             id="defaultArtworkYear"
+            name="defaultArtworkYear"
+            autoComplete="off"
             inputMode="numeric"
             placeholder="2026"
             value={shared.defaultArtworkYear}
@@ -127,6 +140,8 @@ export function SharedDetailsSection({
         <Field id="photographer" label="Photographer">
           <input
             id="photographer"
+            name="photographer"
+            autoComplete="off"
             value={shared.photographer}
             onChange={(e) => onChange("photographer", e.target.value)}
             className={inputClass}

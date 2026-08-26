@@ -17,6 +17,7 @@ const STAGE_LABELS: Record<string, string> = {
   derivatives_generated: "Generating derivatives",
   hr_uploaded: "Uploading High Resolution",
   web_uploaded: "Uploading Web",
+  thumb_uploaded: "Uploading thumbnail",
   metadata_uploaded: "Writing metadata file",
   sheet_row_appended: "Writing Inventory",
   completed: "Complete",
@@ -29,8 +30,10 @@ const OPERATION_LABELS: Record<string, string> = {
   create_folder: "Creating Dropbox folder",
   upload_master: "Uploading Master",
   generate_derivatives: "Generating derivatives",
+  generate_thumbnail: "Generating thumbnail",
   upload_hr: "Uploading High Resolution",
   upload_web: "Uploading Web",
+  upload_thumb: "Uploading thumbnail",
   upload_metadata: "Uploading metadata file",
   append_inventory_row: "Writing Inventory",
   mark_claim_completed: "Complete",
@@ -53,14 +56,23 @@ export function BatchSubmissionReport({
 
   return (
     <div className="animate-fade-in">
-      <header className="max-w-2xl">
+      <header>
         <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
           Kim Artwork Archive
         </p>
-        <h1 className="mt-3 font-display text-4xl tracking-tight text-[var(--ink)] sm:text-5xl">
-          Submission complete
-        </h1>
-        <p className="mt-4 text-[var(--muted)] leading-relaxed">
+        <div className="mt-3 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+          <h1 className="font-display text-4xl tracking-tight text-[var(--ink)] sm:text-5xl">
+            Submission complete
+          </h1>
+          <button
+            type="button"
+            onClick={onStartNewBatch}
+            className="shrink-0 border border-[var(--ink)] bg-[var(--ink)] px-6 py-3 text-sm uppercase tracking-[0.14em] text-[var(--paper)] transition hover:bg-[var(--ink-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+          >
+            Start New Batch
+          </button>
+        </div>
+        <p className="mt-4 max-w-2xl text-[var(--muted)] leading-relaxed">
           Permanent files (including Inventory-ID metadata) are in Dropbox. The
           inventory database is in Google Sheets. This app does not retain the
           archive after delivery.
@@ -282,35 +294,30 @@ export function BatchSubmissionReport({
         </section>
       ) : null}
 
-      <div className="mt-10 flex flex-col gap-3 border-t border-[var(--line)] pt-6 sm:flex-row sm:flex-wrap sm:justify-end">
-        {result.sheetUrl ? (
-          <a
-            href={result.sheetUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="border border-[var(--line)] bg-[var(--surface-elevated)] px-5 py-3 text-center text-sm uppercase tracking-[0.14em] text-[var(--ink)] transition hover:bg-[var(--surface)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
-          >
-            Open Google Sheet
-          </a>
-        ) : null}
-        {result.driveRootUrl ? (
-          <a
-            href={result.driveRootUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="border border-[var(--line)] bg-[var(--surface-elevated)] px-5 py-3 text-center text-sm uppercase tracking-[0.14em] text-[var(--ink)] transition hover:bg-[var(--surface)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
-          >
-            Open Dropbox Archive
-          </a>
-        ) : null}
-        <button
-          type="button"
-          onClick={onStartNewBatch}
-          className="border border-[var(--ink)] bg-[var(--ink)] px-6 py-3 text-sm uppercase tracking-[0.14em] text-[var(--paper)] transition hover:bg-[var(--ink-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
-        >
-          Start New Batch
-        </button>
-      </div>
+      {result.sheetUrl || result.driveRootUrl ? (
+        <div className="mt-10 flex flex-col gap-3 border-t border-[var(--line)] pt-6 sm:flex-row sm:flex-wrap sm:justify-center">
+          {result.sheetUrl ? (
+            <a
+              href={result.sheetUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="border border-[var(--line)] bg-[var(--surface-elevated)] px-5 py-3 text-center text-sm uppercase tracking-[0.14em] text-[var(--ink)] transition hover:bg-[var(--surface)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+            >
+              Open Google Sheet
+            </a>
+          ) : null}
+          {result.driveRootUrl ? (
+            <a
+              href={result.driveRootUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="border border-[var(--line)] bg-[var(--surface-elevated)] px-5 py-3 text-center text-sm uppercase tracking-[0.14em] text-[var(--ink)] transition hover:bg-[var(--surface)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+            >
+              Open Dropbox Archive
+            </a>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

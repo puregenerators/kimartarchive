@@ -1,10 +1,11 @@
-export type AssetType = "master" | "hr" | "web";
+export type AssetType = "master" | "hr" | "web" | "thumb";
 
 export type PlannedFilenames = {
   sequence: string;
   master: string;
   hr: string;
   web: string;
+  thumb: string;
   /** Inventory-ID-based portable metadata filename. */
   metadata: string;
 };
@@ -92,7 +93,7 @@ export function buildArtworkMetadataFilename(inventoryId: number): string {
 }
 
 /**
- * Plan master / HR / web filenames for one artwork with a single master image.
+ * Plan master / HR / web / thumbnail filenames for one artwork with a single master image.
  * Sequence is always 01 in the batch intake workflow.
  */
 export function planFilenamesForArtwork(params: {
@@ -126,6 +127,14 @@ export function planFilenamesForArtwork(params: {
       inventoryId: params.inventoryId,
       title: params.title,
       assetType: "web",
+      sequence: 1,
+      extension: ".jpg",
+    }),
+    thumb: buildArtworkFilename({
+      year: params.year,
+      inventoryId: params.inventoryId,
+      title: params.title,
+      assetType: "thumb",
       sequence: 1,
       extension: ".jpg",
     }),
@@ -167,6 +176,14 @@ export function planFilenamesForMasters(params: {
         inventoryId: params.inventoryId,
         title: params.title,
         assetType: "web",
+        sequence: sequenceIndex,
+        extension: ".jpg",
+      }),
+      thumb: buildArtworkFilename({
+        year: params.year,
+        inventoryId: params.inventoryId,
+        title: params.title,
+        assetType: "thumb",
         sequence: sequenceIndex,
         extension: ".jpg",
       }),

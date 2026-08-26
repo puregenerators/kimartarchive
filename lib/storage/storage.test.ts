@@ -192,7 +192,7 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "create folder, upload three images plus Inventory-ID metadata file, record Dropbox shared URLs",
+    name: "create folder, upload images plus thumbnail and Inventory-ID metadata file, record Dropbox shared URLs",
     run: async () => {
       const ops = createMockOps();
       const storage = createDropboxStorageProvider(async () => ops);
@@ -220,6 +220,12 @@ const tests: TestCase[] = [
         mimeType: "image/jpeg",
         contents: Buffer.from("web-bytes"),
       });
+      const thumb = await storage.uploadFile({
+        parentId: folder.id,
+        name: "2026_KO_1000_BlueGarden_thumb_01.jpg",
+        mimeType: "image/jpeg",
+        contents: Buffer.from("thumb-bytes"),
+      });
       const metadataFilename = "1000_metadata.json";
       const metadataJson = JSON.stringify(
         {
@@ -241,6 +247,7 @@ const tests: TestCase[] = [
       assertTrue(master.webViewLink.includes("dropbox.com"), "master url");
       assertTrue(hr.webViewLink.includes("dropbox.com"), "hr url");
       assertTrue(web.webViewLink.includes("dropbox.com"), "web url");
+      assertTrue(thumb.webViewLink.includes("dropbox.com"), "thumb url");
       assertTrue(metadata.webViewLink.includes("dropbox.com"), "metadata url");
       assertEqual(metadata.name, "1000_metadata.json", "metadata filename");
       assertEqual(
@@ -249,6 +256,20 @@ const tests: TestCase[] = [
         ),
         true,
         "master exists",
+      );
+      assertEqual(
+        await ops.pathExists(
+          "/2026_KO_1000_BlueGarden/2026_KO_1000_BlueGarden_web_01.jpg",
+        ),
+        true,
+        "web exists",
+      );
+      assertEqual(
+        await ops.pathExists(
+          "/2026_KO_1000_BlueGarden/2026_KO_1000_BlueGarden_thumb_01.jpg",
+        ),
+        true,
+        "thumb exists",
       );
       assertEqual(
         await ops.pathExists("/2026_KO_1000_BlueGarden/1000_metadata.json"),
@@ -269,6 +290,7 @@ const tests: TestCase[] = [
           master.webViewLink,
           hr.webViewLink,
           web.webViewLink,
+          thumb.webViewLink,
           metadata.webViewLink,
           folder.webViewLink,
         ].every((u) => u.includes("dropbox.com")),
@@ -385,6 +407,31 @@ const tests: TestCase[] = [
         true,
         "file moved with folder",
       );
+    },
+  },
+  {
+    name: "retry overwrite of the same thumbnail path does not create a second file",
+    run: async () => {
+      const ops = createMockOps();
+      const storage = createDropboxStorageProvider(async () => ops);
+      const folder = await storage.createArtworkFolder("2026_KO_1000_BlueGarden");
+      const name = "2026_KO_1000_BlueGarden_thumb_01.jpg";
+      await storage.uploadFile({
+        parentId: folder.id,
+        name,
+        mimeType: "image/jpeg",
+        contents: Buffer.from("first"),
+      });
+      await storage.uploadFile({
+        parentId: folder.id,
+        name,
+        mimeType: "image/jpeg",
+        contents: Buffer.from("second"),
+      });
+      const path = `/${folder.name}/${name}`;
+      const downloaded = await ops.downloadFile(path);
+      assertEqual(downloaded.toString("utf8"), "second", "overwritten bytes");
+      assertEqual(await ops.pathExists(path), true, "single canonical path");
     },
   },
 ];

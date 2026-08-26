@@ -4,12 +4,13 @@
  * Accepts one complete batch as multipart/form-data, claims inventory IDs,
  * processes artworks sequentially, and returns one structured report.
  *
- * Local-only architecture: temporary files live under os.tmpdir(), not the repo.
- * Production hosting for large uploads remains unresolved.
+ * Temporary files live under os.tmpdir(). Production Vercel request bodies
+ * are capped at 4.5 MB — large TIFF masters cannot pass through this route.
  */
 
 import { NextResponse } from "next/server";
 
+import { unauthorizedApiResponse } from "@/lib/auth/access";
 import { submitArtworkBatch } from "@/lib/submission/submit-batch";
 import type {
   ArtworkBatchSubmissionInput,
@@ -38,6 +39,7 @@ function parseArtworkEntry(value: unknown): ArtworkSubmissionInput | null {
     clientArtworkId: String(raw.clientArtworkId ?? ""),
     order: Number(raw.order ?? 0),
     title: String(raw.title ?? ""),
+    ...(raw.isUntitled === true ? { isUntitled: true as const } : {}),
     year: String(raw.year ?? ""),
     medium: String(raw.medium ?? "").trim(),
     height: String(raw.height ?? ""),
@@ -92,6 +94,9 @@ function parseSharedJson(
 }
 
 export async function POST(request: Request) {
+  const denied = await unauthorizedApiResponse();
+  if (denied) return denied;
+
   try {
     const contentType = request.headers.get("content-type") || "";
     if (!contentType.includes("multipart/form-data")) {

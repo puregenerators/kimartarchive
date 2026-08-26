@@ -12,6 +12,7 @@
 export const TEST_FAULT_OPERATIONS = [
   "upload_high_resolution",
   "upload_hr",
+  "upload_thumb",
 ] as const;
 
 export type TestFaultOperation = (typeof TEST_FAULT_OPERATIONS)[number];
@@ -52,6 +53,9 @@ function normalizeOperation(
   const value = raw.trim().toLowerCase();
   if (value === "upload_high_resolution" || value === "upload_hr") {
     return value === "upload_hr" ? "upload_hr" : "upload_high_resolution";
+  }
+  if (value === "upload_thumb" || value === "upload_thumbnail") {
+    return "upload_thumb";
   }
   return null;
 }

@@ -19,6 +19,11 @@ import {
   sanitizeDropboxErrorText,
 } from "./errors";
 import {
+  getDropboxDirectImageUrl,
+  isDropboxSharedLinkAlreadyExistsError,
+  normalizeDropboxSharedLinkForImage,
+} from "./direct-image-url";
+import {
   DROPBOX_AUTHORIZE_URL,
   buildAuthorizeUrl,
   exchangeAuthorizationCode,
@@ -626,6 +631,49 @@ const tests: TestCase[] = [
         credentialsStorageDescription().includes("DROPBOX_REFRESH_TOKEN"),
         true,
         "mentions env token",
+      );
+    },
+  },
+  {
+    name: "shared Dropbox preview URL becomes a direct image URL",
+    run: () => {
+      const shared =
+        "https://www.dropbox.com/scl/fi/abc123/tulip_thumb_01.jpg?rlkey=secretkey&dl=0";
+      const result = normalizeDropboxSharedLinkForImage(shared);
+      assertEqual(result.ok, true, "ok");
+      if (!result.ok) return;
+      const direct = new URL(result.directImageUrl);
+      assertEqual(direct.hostname, "dl.dropboxusercontent.com", "usercontent host");
+      assertEqual(direct.searchParams.get("raw"), "1", "raw=1");
+      assertEqual(direct.searchParams.get("dl"), null, "dl removed");
+      assertEqual(direct.searchParams.get("rlkey"), "secretkey", "rlkey kept");
+      assertEqual(getDropboxDirectImageUrl(shared), result.directImageUrl, "helper");
+    },
+  },
+  {
+    name: "existing shared_link_already_exists is treated as reuse, not failure",
+    run: () => {
+      assertEqual(
+        isDropboxSharedLinkAlreadyExistsError({
+          errorTag: "shared_link_already_exists",
+          message: "shared_link_already_exists/",
+        }),
+        true,
+        "tag",
+      );
+      assertEqual(
+        isDropboxSharedLinkAlreadyExistsError({
+          errorSummary: "shared_link_already_exists/",
+        }),
+        true,
+        "summary",
+      );
+      assertEqual(
+        isDropboxSharedLinkAlreadyExistsError({
+          message: "path/not_found/",
+        }),
+        false,
+        "other error",
       );
     },
   },

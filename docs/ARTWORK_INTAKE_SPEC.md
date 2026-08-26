@@ -24,6 +24,7 @@ Do **not** resolve the Drive root by name at runtime. Always use `GOOGLE_DRIVE_R
 | Google auth / Sheets / Drive foundation | Implemented |
 | `/setup/google` diagnostics + confirmed setup actions | Implemented |
 | Final artwork submission (claim, upload, sheet row) | **Implemented** — see `docs/SUBMISSION_PIPELINE.md` |
+| Read-only visual archive (`/artworks`) | **Implemented** — see `docs/ARTWORK_ARCHIVE.md` |
 | Sharp image processing (local test milestone) | **Implemented** (dev preview + reused by submission) |
 | Application password auth | **Not implemented** |
 | Production large-file upload architecture | **Unresolved** (see §12) |
@@ -40,7 +41,7 @@ Env vars for Google (server-only; never `NEXT_PUBLIC_`):
 
 See `docs/GOOGLE_SETUP.md` and `docs/SUBMISSION_PIPELINE.md`.
 
-**Authoritative archive:** Google Drive (files) and Google Sheets (metadata). Local form state and temp files are discarded after delivery. The app is not a database.
+**Authoritative archive:** Dropbox (files, default) and Google Sheets (metadata). Local form state and temp files are discarded after delivery. The app is not a database. `/artworks` is a visual read layer over the live Sheet — see `docs/ARTWORK_ARCHIVE.md`.
 
 ---
 
@@ -69,13 +70,13 @@ For **each** artwork in the batch:
 3. Claim the next inventory number (duplicate-safe).
 4. Generate standardized filenames (sequence `01`).
 5. Preserve the original master file (no recompression).
-6. Create high-resolution JPG and web JPG derivatives.
+6. Create high-resolution JPG, web JPG, and thumbnail JPG derivatives.
 7. Upload all image files plus portable `{inventoryId}_metadata.json` via the storage provider.
 8. Append **one** artwork row to the primary sheet tab (including file links).
 
 Then show a success summary for the batch (inventory IDs and generated files).
 
-**MVP auth:** gate the app with a single shared application password (`APP_ACCESS_PASSWORD`) and an HTTP-only session cookie. Keep auth isolated so it can be replaced later.
+**MVP auth:** gate the app with a single shared application password (`APP_ACCESS_PASSWORD`) and an HTTP-only session cookie. Keep auth isolated so it can be replaced later. If the password is missing in production, fail closed.
 
 **MVP processing:** local processing is supported first. Production upload architecture for large files is unresolved (see §12).
 
@@ -85,7 +86,7 @@ Then show a success summary for the batch (inventory IDs and generated files).
 
 Out of scope for this app (initial build):
 
-- Full archive management, browsing, search, editing, or deletion of existing artworks
+- Full archive **management** (editing or deletion of existing artworks)
 - Clerk, Supabase Auth, Auth.js, or any full user-account system
 - Any database other than Google Sheets (no Supabase, Prisma, Postgres, etc.)
 - Encoding meaning into inventory IDs (year, type, title)
@@ -118,11 +119,11 @@ Entered once per batch. Exhibition and Gallery / Venue are optional.
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| Title | Yes | |
+| Title | Yes* | Required unless the user explicitly checks **Missing / no known title**. That records the canonical archived title exactly `Untitled` — never `Untitled 1`, `Untitled 2026`, or `Untitled (1047)`. Inventory IDs provide uniqueness. Blank titles are **not** auto-converted to Untitled. Typing the literal title `Untitled` is also valid without the checkbox. |
 | Artwork Year | Yes | Four-digit; used in filenames and Drive year folder |
 | Medium | Yes | Controlled: Monotype, Painting, or Other. Common values are Monotype and Painting. Other reveals a required **Specify medium** field (e.g. Watercolor, Drawing, Mixed media). The final stored value is the resolved string — never the literal dropdown value `Other`. Existing custom values load as Other + the stored text. |
-| Height / Width | Yes | Positive numbers |
-| Dimension Unit | Yes | `in` or `cm` |
+| Height / Width | No | Positive numbers when provided |
+| Dimension Unit | No | `in` or `cm`; **default `in`** |
 | Master image | Yes | Exactly one; TIFF, JPEG, or PNG |
 | Depth | No | Positive when provided |
 | Notes | No | |
@@ -143,9 +144,19 @@ Empty override → use shared value on the final record.
 - Later edits to shared defaults do **not** silently overwrite artwork values already on cards.
 - Explicit action: **Apply shared details to all artworks** lets the user choose which fields to update (Year, Medium, Dimension Unit, and optionally Exhibition / Gallery / Photographer overrides). When Medium is selected, the resolved shared medium value is applied — artwork-specific medium is left alone unless Medium is explicitly chosen.
 - That action **never** overwrites Title, Height, Width, Depth, Notes, or image.
-- Batch review and confirmation display the resolved medium only (never the dropdown label `Other`).
+- **Apply Untitled to selected artworks** is a separate batch action. It does **not** run automatically and does **not** mark every artwork untitled. The user must select artworks. Works that already have a title are not overwritten unless the user explicitly confirms replacing those titles. The archived title is exactly `Untitled`; the previous typed/suggested title is kept in UI state so unchecking **Missing / no known title** can restore it.
+- Batch review and confirmation display the resolved medium only (never the dropdown label `Other`). Review shows **Title: Untitled** for works marked missing-title — not wording such as “Missing title”. The server resolves the submitted title to exactly `Untitled` when the transient `isUntitled` flag is set. An empty browser title is not treated as untitled.
 
-### 3.5 Captured archive metadata
+### 3.5 Untitled / unknown titles
+
+Unknown or missing titles may be recorded explicitly as `Untitled`:
+
+- All such artworks share the same canonical title string: `Untitled`.
+- Permanent Inventory IDs provide uniqueness (and appear in filenames and folder names).
+- Blank Title fields are not automatically converted to Untitled. The user must check **Missing / no known title** (or type the literal title `Untitled`).
+- `isUntitled` is a transient intake/validation flag only. Google Sheets continues to store a single **Title** column.
+
+### 3.6 Captured archive metadata
 
 The current archive captures:
 
@@ -175,33 +186,38 @@ Column order is fixed. Shared batch metadata is copied onto each row.
 | # | Column |
 | --- | --- |
 | 1 | Inventory ID |
-| 2 | Title |
-| 3 | Year |
-| 4 | Medium |
-| 5 | Height |
-| 6 | Width |
-| 7 | Depth |
-| 8 | Dimension Unit |
-| 9 | Photographer |
-| 10 | Exhibition |
-| 11 | Gallery / Venue |
-| 12 | Notes |
-| 13 | Master Filename |
-| 14 | Master File URL |
-| 15 | High Resolution Filename |
-| 16 | High Resolution File URL |
-| 17 | Web Filename |
-| 18 | Web File URL |
-| 19 | Artwork Folder URL |
-| 20 | Created At |
-| 21 | Updated At |
+| 2 | Thumbnail |
+| 3 | Title |
+| 4 | Year |
+| 5 | Medium |
+| 6 | Height |
+| 7 | Width |
+| 8 | Depth |
+| 9 | Dimension Unit |
+| 10 | Photographer |
+| 11 | Exhibition |
+| 12 | Gallery / Venue |
+| 13 | Notes |
+| 14 | Master Filename |
+| 15 | Master File URL |
+| 16 | High Resolution Filename |
+| 17 | High Resolution File URL |
+| 18 | Web Filename |
+| 19 | Web File URL |
+| 20 | Artwork Folder URL |
+| 21 | Created At |
+| 22 | Updated At |
 
 **Medium column:** stores only the resolved medium string (Monotype, Painting, Watercolor, Mixed media, etc.). There is no second column for custom medium. The intake UI may present Monotype / Painting / Other, but Google Sheets never receives a separate “custom medium” field — Other is resolved before submission.
+
+**Title column:** stores the artwork title, including the canonical value `Untitled` when the work has no known title. There is no `isUntitled`, “Missing title”, or similar column.
+
+**Thumbnail column:** display-only. Intake writes `=IMAGE("direct-dropbox-url", 1)` so the cell renders the thumbnail while preserving aspect ratio. There is no Thumbnail Filename or Thumbnail URL column.
 
 Copyable header row:
 
 ```text
-Inventory ID	Title	Year	Medium	Height	Width	Depth	Dimension Unit	Photographer	Exhibition	Gallery / Venue	Notes	Master Filename	Master File URL	High Resolution Filename	High Resolution File URL	Web Filename	Web File URL	Artwork Folder URL	Created At	Updated At
+Inventory ID	Thumbnail	Title	Year	Medium	Height	Width	Depth	Dimension Unit	Photographer	Exhibition	Gallery / Venue	Notes	Master Filename	Master File URL	High Resolution Filename	High Resolution File URL	Web Filename	Web File URL	Artwork Folder URL	Created At	Updated At
 ```
 
 ### 4.2 Filename / URL cells
@@ -252,6 +268,14 @@ YYYY_KO_INVENTORYID_SanitizedTitle_ASSETTYPE_SEQUENCE.ext
 2026_KO_1047_BlueGarden_web_01.jpg
 ```
 
+Works with no known title use the same pattern with the title segment `Untitled`. Inventory IDs keep multiple untitled works unique:
+
+```text
+2026_KO_1047_Untitled_master_01.tif
+2026_KO_1047_Untitled_hr_01.jpg
+2026_KO_1047_Untitled_web_01.jpg
+```
+
 **Rules:**
 
 - Separators are underscores.
@@ -282,7 +306,7 @@ Kim Artwork Archive/          ← archive root folder ID
   Failed Intake/              ← destination for incomplete intakes
 ```
 
-- **One artwork folder per artwork**, named `YYYY_KO_INVENTORYID_SanitizedTitle`.
+- **One artwork folder per artwork**, named `YYYY_KO_INVENTORYID_SanitizedTitle` (untitled works use the title segment `Untitled`, e.g. `2026_KO_1047_Untitled`).
 - Artwork folders are **flat**: master, HR JPG, web JPG, and `{inventoryId}_metadata.json` live directly in the artwork folder (no year parent folder; no `Master/` / `High Resolution/` / `Web/` subfolders).
 - Sheet column **Artwork Folder URL** points at that artwork folder.
 - Google Sheets remains the primary inventory database; `{inventoryId}_metadata.json` is a portable backup that travels with the folder and stays identifiable if copied outside it.
@@ -366,8 +390,10 @@ Details: `docs/SUBMISSION_PIPELINE.md`.
 
 ## 11. Private access (MVP)
 
-- Single shared password in env: `APP_ACCESS_PASSWORD`.
-- After successful login, store access in a **secure, HTTP-only, SameSite** cookie.
+- Single shared password in env: `APP_ACCESS_PASSWORD` (server-only; never `NEXT_PUBLIC_`).
+- After successful login, store access in a **secure, HTTP-only, SameSite=Lax** cookie. The cookie holds an HMAC session token, not the password.
+- Pages, API routes, and Server Actions each verify the session. Do not rely on page redirects alone.
+- If `APP_ACCESS_PASSWORD` is missing, **fail closed** (no public access), including in production.
 - Keep authentication code isolated so it can later be replaced with a proper user account system.
 - Do **not** use Clerk, Supabase Auth, or Auth.js for the initial build.
 
@@ -375,11 +401,22 @@ Details: `docs/SUBMISSION_PIPELINE.md`.
 
 ## 12. Unresolved production concern — large TIFF / Vercel limits
 
-**Status: unresolved. Do not treat as decided.**
+**Status: unresolved. Do not treat TIFF intake as production-ready because a deploy succeeded.**
 
-Large TIFF uploads and Sharp processing may exceed normal Vercel request body, duration, and memory limits even when files are within the MVP product limits (250 MB / file).
+Intake still POSTs the full master file through `POST /api/artwork-batches/submit`. On Vercel that is a Function request body.
 
-- Do **not** assume a normal Vercel server action or Route Handler can receive full master binaries.
+Current Vercel constraints (see [Functions limitations](https://vercel.com/docs/functions/limitations)):
+
+| Constraint | Limit | Effect on this app |
+| --- | --- | --- |
+| Function request/response body | **4.5 MB** (hard; not configurable) | Masters larger than ~4.5 MB return `413 FUNCTION_PAYLOAD_TOO_LARGE` before Sharp or Dropbox run |
+| Function duration | Hobby 300s max; Pro default 300s, max 800s | This app sets `maxDuration = 300` on submit |
+| Function memory | Hobby 2 GB; Pro up to 4 GB | Large TIFF decode in Sharp can still OOM |
+| Next.js Proxy body buffer | 10 MB default if Proxy reads/clones the body | Upload APIs are **excluded** from `proxy.ts` so masters are not truncated there |
+
+Product limits (250 MB / file, 750 MB / batch) are **not** achievable through this request path. Production-scale TIFF intake needs a direct-to-storage upload (presigned URL or similar) that never passes the master through a Vercel Function.
+
+- Do **not** assume a normal Vercel Route Handler can receive full master binaries.
 - Do **not** choose Vercel Blob or another temporary storage service yet.
 - Local implementation may process files available on disk / local upload for development.
 - Decide production upload architecture **after** testing representative master files (especially large TIFFs) against the target runtime.
@@ -400,7 +437,7 @@ A later **optional** step may create a Notion database entry per artwork, using 
 
 | Variable | Purpose |
 | --- | --- |
-| `APP_ACCESS_PASSWORD` | Shared MVP app password (auth not implemented yet) |
+| `APP_ACCESS_PASSWORD` | Shared MVP app password (required; fail closed if missing) |
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL` | Service account email |
 | `GOOGLE_PRIVATE_KEY` | Service account private key (PEM; `\n` normalized) |
 | `GOOGLE_SHEET_ID` | Production Artwork Inventory spreadsheet ID |

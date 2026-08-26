@@ -4,7 +4,7 @@
  */
 
 const PLANNED_FILENAME_PATTERN =
-  /^\d{4}_KO_\d+_[A-Za-z0-9]+_(master|hr|web)_\d{2}\.(jpg|png|tif)$/;
+  /^\d{4}_KO_\d+_[A-Za-z0-9]+_(master|hr|web|thumb)_\d{2}\.(jpg|png|tif)$/;
 
 export function basenameOnly(value: string): string {
   const normalized = value.replace(/\\/g, "/");

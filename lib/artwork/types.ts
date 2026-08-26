@@ -10,10 +10,15 @@ export const MAX_FILE_BYTES = 250 * 1024 * 1024;
 export const MAX_BATCH_BYTES = 750 * 1024 * 1024;
 
 /**
- * Hard cap on artworks per batch. Typical working batches are 10–12;
- * 24 leaves room for a large documentation session without unbounded UI state.
+ * Hard cap on source artworks per batch (one user-selected file each).
+ * Derivative files generated later do not count against this limit.
+ * Still subject to {@link MAX_BATCH_BYTES}.
  */
 export const MAX_ARTWORKS_PER_BATCH = 24;
+
+export function remainingArtworkSlots(currentCount: number): number {
+  return Math.max(0, MAX_ARTWORKS_PER_BATCH - currentCount);
+}
 
 export type BatchSharedDetails = {
   exhibition: string;
@@ -44,6 +49,11 @@ export type ArtworkDraft = {
   titleSuggestedFromFilename: boolean;
   /** True when the filename suggestion stripped a configured artist alias. */
   titleArtistAliasRemoved: boolean;
+  /**
+   * Transient UI/validation flag: archive title as exactly `Untitled`.
+   * Not a Google Sheets column. Typed `title` is preserved for restore.
+   */
+  isUntitled: boolean;
   year: string;
   medium: string;
   height: string;
@@ -133,6 +143,7 @@ export function createArtworkDraft(
     title?: string;
     titleSuggestedFromFilename?: boolean;
     titleArtistAliasRemoved?: boolean;
+    isUntitled?: boolean;
   },
 ): ArtworkDraft {
   return {
@@ -140,6 +151,7 @@ export function createArtworkDraft(
     title: options?.title ?? "",
     titleSuggestedFromFilename: options?.titleSuggestedFromFilename ?? false,
     titleArtistAliasRemoved: options?.titleArtistAliasRemoved ?? false,
+    isUntitled: options?.isUntitled ?? false,
     year: shared.defaultArtworkYear,
     medium: shared.defaultMedium,
     height: "",
@@ -175,9 +187,14 @@ export function effectiveOverride(
   return artworkValue.trim() ? artworkValue : sharedValue;
 }
 
+const hasText = (value: unknown): value is string =>
+  typeof value === "string" && value.trim().length > 0;
+
 /**
  * Apply selected shared defaults onto artworks.
- * Never overwrites Title, Height, Width, Depth, Notes, or image.
+ * Only populated shared fields are copied; blank / whitespace shared values
+ * leave each artwork’s existing value unchanged.
+ * Never overwrites Title, the untitled flag, Height, Width, Depth, Notes, or image.
  * Exhibition / gallery / photographer write into override fields when selected.
  */
 export function applySharedDetailsToArtworks(
@@ -187,24 +204,48 @@ export function applySharedDetailsToArtworks(
 ): ArtworkDraft[] {
   const selected = new Set(selectedKeys);
 
-  return artworks.map((artwork) => {
-    const next: ArtworkDraft = { ...artwork, overrides: { ...artwork.overrides } };
+  const sharedPatch = {
+    ...(selected.has("year") &&
+      hasText(shared.defaultArtworkYear) && {
+        year: shared.defaultArtworkYear.trim(),
+      }),
+    ...(selected.has("medium") &&
+      hasText(shared.defaultMedium) && {
+        medium: shared.defaultMedium.trim(),
+      }),
+    ...(selected.has("dimensionUnit") && {
+      dimensionUnit: shared.defaultDimensionUnit,
+    }),
+    ...(selected.has("exhibition") &&
+      hasText(shared.exhibition) && {
+        exhibition: shared.exhibition.trim(),
+      }),
+    ...(selected.has("gallery") &&
+      hasText(shared.gallery) && {
+        gallery: shared.gallery.trim(),
+      }),
+    ...(selected.has("photographer") &&
+      hasText(shared.photographer) && {
+        photographer: shared.photographer.trim(),
+      }),
+  };
 
-    if (selected.has("year")) next.year = shared.defaultArtworkYear;
-    if (selected.has("medium")) next.medium = shared.defaultMedium;
-    if (selected.has("dimensionUnit")) {
-      next.dimensionUnit = shared.defaultDimensionUnit;
-    }
-    if (selected.has("exhibition")) {
-      next.overrides.exhibition = shared.exhibition;
-    }
-    if (selected.has("gallery")) {
-      next.overrides.gallery = shared.gallery;
-    }
-    if (selected.has("photographer")) {
-      next.overrides.photographer = shared.photographer;
-    }
-
-    return next;
-  });
+  return artworks.map((artwork) => ({
+    ...artwork,
+    ...("year" in sharedPatch && { year: sharedPatch.year }),
+    ...("medium" in sharedPatch && { medium: sharedPatch.medium }),
+    ...("dimensionUnit" in sharedPatch && {
+      dimensionUnit: sharedPatch.dimensionUnit,
+    }),
+    overrides: {
+      ...artwork.overrides,
+      ...("exhibition" in sharedPatch && {
+        exhibition: sharedPatch.exhibition,
+      }),
+      ...("gallery" in sharedPatch && { gallery: sharedPatch.gallery }),
+      ...("photographer" in sharedPatch && {
+        photographer: sharedPatch.photographer,
+      }),
+    },
+  }));
 }

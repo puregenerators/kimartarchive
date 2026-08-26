@@ -90,6 +90,17 @@ const result: ArtworkProcessingSuccess = {
     previewUrl: "/api/dev/processed-image/result-1/web",
     downloadUrl: "/api/dev/processed-image/result-1/web?download=1",
   },
+  thumb: {
+    filename: "2026_KO_1000_BlueGarden_thumb_01.jpg",
+    width: 500,
+    height: 343,
+    byteLength: 48_000,
+    format: "jpeg",
+    quality: 84,
+    wasResized: true,
+    previewUrl: "/api/dev/processed-image/result-1/thumb",
+    downloadUrl: "/api/dev/processed-image/result-1/thumb?download=1",
+  },
   comparisons: {
     hrSizeRatio: 9_227_000 / 99_000_000,
     webSizeRatio: 776_000 / 99_000_000,
@@ -170,6 +181,7 @@ const tests: TestCase[] = [
       for (const [label, filename] of [
         ["high-resolution JPG", result.hr.filename],
         ["web JPG", result.web.filename],
+        ["thumbnail JPG", result.thumb.filename],
         ["planned master", result.master.filename],
       ] as const) {
         assert(
@@ -179,7 +191,7 @@ const tests: TestCase[] = [
       }
       assertEqual(
         markup.split(">Copy</button>").length - 1,
-        3,
+        4,
         "one copy button per file",
       );
     },
@@ -241,13 +253,14 @@ const tests: TestCase[] = [
     name: "summary uses existing result data",
     run: () => {
       const items = buildProcessingSummaryItems(result);
-      assertEqual(items.length, 4, "four summary items");
+      assertEqual(items.length, 5, "five summary items");
       assertEqual(items[0]!.label, "Master", "master label");
       assertEqual(items[0]!.value, "94.4 MB", "master size");
       assertEqual(items[1]!.value, "8.8 MB", "hr size");
       assertEqual(items[2]!.value, "757.8 KB", "web size");
-      assertEqual(items[3]!.label, "Processed in", "duration label");
-      assertEqual(items[3]!.value, "2.6 seconds", "duration value");
+      assertEqual(items[3]!.label, "Thumb", "thumb label");
+      assertEqual(items[4]!.label, "Processed in", "duration label");
+      assertEqual(items[4]!.value, "2.6 seconds", "duration value");
 
       const markup = renderPanel();
       for (const item of items) {

@@ -25,6 +25,9 @@ export type SubmissionAuditEvent = {
   outcome?: string;
   archiveTarget?: string;
   detail?: string;
+  /** Stage durations in milliseconds (server/dev diagnostics only). */
+  durationMs?: number;
+  timings?: Record<string, number>;
 };
 
 export function logSubmissionEvent(event: SubmissionAuditEvent): void {

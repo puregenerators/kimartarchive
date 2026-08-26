@@ -6,6 +6,9 @@
 
 import {
   ARTWORK_INVENTORY_HEADERS,
+  ARTWORK_INVENTORY_HEADERS_BEFORE_THUMBNAIL,
+  ARTWORK_INVENTORY_THUMBNAIL_COLUMN_INDEX,
+  headersEqual,
   normalizeHeaderRow,
 } from "@/lib/google/headers";
 
@@ -110,15 +113,20 @@ export type InventoryHeaderMigrationPlan =
       actualHeaders?: string[];
     };
 
-function headersEqual(
-  actual: readonly string[],
-  expected: readonly string[],
-): boolean {
-  return (
-    actual.length === expected.length &&
-    actual.every((header, index) => header === expected[index])
-  );
-}
+export type ThumbnailColumnInsertPlan =
+  | {
+      ok: true;
+      alreadyMigrated: boolean;
+      /** 0-based column index at which to insert Thumbnail. */
+      insertColumnIndex: number;
+      expectedAfter: readonly string[];
+    }
+  | {
+      ok: false;
+      reason: "header_mismatch";
+      message: string;
+      actualHeaders?: string[];
+    };
 
 /**
  * Scan data rows for non-blank Location cells (index in the with-Location schema).
@@ -171,8 +179,9 @@ export function findValuesInRemovedInventoryColumns(
 }
 
 /**
- * Project a with-Location row into the current schema by dropping Location.
+ * Project a with-Location row into the 21-column schema by dropping Location.
  * Used in tests to prove Photographer and later columns stay aligned.
+ * Thumbnail is added by a later insert, not by this projection.
  */
 export function projectInventoryRowDroppingLocation(
   rowWithLocation: readonly string[],
@@ -196,7 +205,9 @@ export function projectLegacyInventoryRowToCurrent(
 
 /**
  * Plan removal of Location from Artwork Inventory.
- * Accepts the 22-column with-Location schema (current live state).
+ * Accepts the 22-column with-Location schema.
+ * Location-already-gone is true for both the 21-column pre-Thumbnail schema
+ * and the live schema with Thumbnail.
  * Does not mutate Sheets — caller applies deleteDimension when ok && !alreadyMigrated.
  */
 export function planArtworkInventoryHeaderMigration(params: {
@@ -211,6 +222,15 @@ export function planArtworkInventoryHeaderMigration(params: {
       alreadyMigrated: true,
       deleteColumnIndicesDescending: [],
       expectedAfter: ARTWORK_INVENTORY_HEADERS,
+    };
+  }
+
+  if (headersEqual(actual, ARTWORK_INVENTORY_HEADERS_BEFORE_THUMBNAIL)) {
+    return {
+      ok: true,
+      alreadyMigrated: true,
+      deleteColumnIndicesDescending: [],
+      expectedAfter: ARTWORK_INVENTORY_HEADERS_BEFORE_THUMBNAIL,
     };
   }
 
@@ -249,6 +269,50 @@ export function planArtworkInventoryHeaderMigration(params: {
     ok: true,
     alreadyMigrated: false,
     deleteColumnIndicesDescending: [LOCATION_COLUMN_INDEX],
+    expectedAfter: ARTWORK_INVENTORY_HEADERS_BEFORE_THUMBNAIL,
+  };
+}
+
+/**
+ * Plan insertion of the Thumbnail display column after Inventory ID.
+ * Existing Title and later columns shift right; data cells in the new column
+ * stay blank (no backfill).
+ */
+export function planArtworkInventoryThumbnailColumnInsert(params: {
+  headerRow: string[] | null | undefined;
+}): ThumbnailColumnInsertPlan {
+  const actual = normalizeHeaderRow(params.headerRow);
+
+  if (headersEqual(actual, ARTWORK_INVENTORY_HEADERS)) {
+    return {
+      ok: true,
+      alreadyMigrated: true,
+      insertColumnIndex: ARTWORK_INVENTORY_THUMBNAIL_COLUMN_INDEX,
+      expectedAfter: ARTWORK_INVENTORY_HEADERS,
+    };
+  }
+
+  if (!headersEqual(actual, ARTWORK_INVENTORY_HEADERS_BEFORE_THUMBNAIL)) {
+    return {
+      ok: false,
+      reason: "header_mismatch",
+      message:
+        "Artwork Inventory headers do not match the 21-column schema before Thumbnail or the live schema with Thumbnail.",
+      actualHeaders: actual,
+    };
+  }
+
+  return {
+    ok: true,
+    alreadyMigrated: false,
+    insertColumnIndex: ARTWORK_INVENTORY_THUMBNAIL_COLUMN_INDEX,
     expectedAfter: ARTWORK_INVENTORY_HEADERS,
   };
+}
+
+export function canInsertArtworkInventoryThumbnailColumn(
+  headerRow: string[] | null | undefined,
+): boolean {
+  const plan = planArtworkInventoryThumbnailColumnInsert({ headerRow });
+  return plan.ok && !plan.alreadyMigrated;
 }

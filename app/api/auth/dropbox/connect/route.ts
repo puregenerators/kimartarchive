@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { unauthorizedBrowserRedirect } from "@/lib/auth/access";
 import { validateDropboxEnv } from "@/lib/dropbox/env";
 import { DropboxIntegrationError } from "@/lib/dropbox/errors";
 import {
@@ -16,7 +17,10 @@ export const dynamic = "force-dynamic";
  * Start Dropbox OAuth (code flow, offline refresh token).
  * Stores CSRF state in an HttpOnly cookie — not credentials.
  */
-export async function GET() {
+export async function GET(request: Request) {
+  const denied = await unauthorizedBrowserRedirect(request);
+  if (denied) return denied;
+
   try {
     const env = validateDropboxEnv();
     const state = generateOAuthState();

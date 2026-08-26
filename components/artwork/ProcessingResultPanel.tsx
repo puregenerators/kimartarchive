@@ -57,7 +57,7 @@ export function ProcessingResultPanel({
   isTiff,
   stale,
 }: ProcessingResultPanelProps) {
-  const { source, hr, web, comparisons } = result;
+  const { source, hr, web, thumb, comparisons } = result;
 
   return (
     <div className="mt-5 border border-[var(--line)] bg-[var(--surface-elevated)] p-4">
@@ -120,7 +120,7 @@ export function ProcessingResultPanel({
         <PreviewFrame label="Web JPG" src={web.previewUrl} />
       </div>
 
-      <div className="mt-6 grid gap-5 lg:grid-cols-2">
+      <div className="mt-6 grid gap-5 lg:grid-cols-3">
         <OutputSummary
           title="High-resolution JPG"
           filenameLabel="high-resolution JPG"
@@ -134,6 +134,13 @@ export function ProcessingResultPanel({
           derivative={web}
           comparison={formatSizeComparison(comparisons.webSizeRatio)}
           downloadLabel="Download web JPG"
+        />
+        <OutputSummary
+          title="Thumbnail JPG"
+          filenameLabel="thumbnail JPG"
+          derivative={thumb}
+          comparison={null}
+          downloadLabel="Download thumbnail JPG"
         />
       </div>
 

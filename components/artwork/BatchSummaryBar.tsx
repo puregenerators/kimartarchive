@@ -4,11 +4,13 @@ import { formatFileSize } from "@/lib/artwork/validation";
 
 type BatchSummaryBarProps = {
   artworkCount: number;
+  maxArtworks: number;
   totalBytes: number;
   needingMetadata: number;
   validationErrors: number;
   testedSuccessfully: number;
   notYetTested: number;
+  canAddMore: boolean;
   onAddMore: () => void;
   onRequestClear: () => void;
 };
@@ -26,11 +28,13 @@ function Stat({ label, value }: { label: string; value: string | number }) {
 
 export function BatchSummaryBar({
   artworkCount,
+  maxArtworks,
   totalBytes,
   needingMetadata,
   validationErrors,
   testedSuccessfully,
   notYetTested,
+  canAddMore,
   onAddMore,
   onRequestClear,
 }: BatchSummaryBarProps) {
@@ -45,7 +49,7 @@ export function BatchSummaryBar({
             Batch summary
           </h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            {artworkCount} artwork{artworkCount === 1 ? "" : "s"} ·{" "}
+            {artworkCount} of {maxArtworks} artworks ·{" "}
             {formatFileSize(totalBytes)} total source size
           </p>
         </div>
@@ -53,9 +57,15 @@ export function BatchSummaryBar({
           <button
             type="button"
             onClick={onAddMore}
-            className="border border-[var(--line)] bg-[var(--surface-elevated)] px-3 py-2 text-xs uppercase tracking-[0.12em] text-[var(--ink)] transition hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+            disabled={!canAddMore}
+            title={
+              canAddMore
+                ? undefined
+                : `A batch can include at most ${maxArtworks} artworks.`
+            }
+            className="border border-[var(--line)] bg-[var(--surface-elevated)] px-3 py-2 text-xs uppercase tracking-[0.12em] text-[var(--ink)] transition hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Add More Images
+            {canAddMore ? "Add More Images" : "Batch Full"}
           </button>
           <button
             type="button"
@@ -68,7 +78,7 @@ export function BatchSummaryBar({
       </div>
 
       <dl className="mt-4 flex flex-wrap gap-x-6 gap-y-3">
-        <Stat label="Artworks" value={artworkCount} />
+        <Stat label="Artworks" value={`${artworkCount} / ${maxArtworks}`} />
         <Stat label="Total size" value={formatFileSize(totalBytes)} />
         <Stat label="Need metadata" value={needingMetadata} />
         <Stat label="Validation errors" value={validationErrors} />

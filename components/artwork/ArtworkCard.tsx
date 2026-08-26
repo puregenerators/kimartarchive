@@ -17,6 +17,11 @@ import {
   type ArtworkValidationErrors,
 } from "@/lib/artwork/types";
 import {
+  UNTITLED_TITLE,
+  resolveArtworkTitle,
+  setArtworkUntitled,
+} from "@/lib/artwork/untitled";
+import {
   describeImageType,
   formatFileSize,
 } from "@/lib/artwork/validation";
@@ -160,7 +165,7 @@ export function ArtworkCard({
             id={`artwork-heading-${artwork.id}`}
             className="mt-0.5 truncate font-display text-lg text-[var(--ink)]"
           >
-            {artwork.title.trim() || "Untitled"}
+            {resolveArtworkTitle(artwork) || "No title yet"}
           </h3>
         </div>
         <div className="flex flex-wrap items-center gap-1">
@@ -256,23 +261,45 @@ export function ArtworkCard({
             <Field
               id={`${artwork.id}-title`}
               label="Title"
-              required
+              required={!artwork.isUntitled}
               error={errors?.title}
               hint={
-                artwork.titleSuggestedFromFilename
-                  ? artwork.titleArtistAliasRemoved
-                    ? "Removed artist name from filename."
-                    : "Suggested from filename — edit freely"
-                  : undefined
+                artwork.isUntitled
+                  ? "This is the title that will be archived."
+                  : artwork.titleSuggestedFromFilename
+                    ? artwork.titleArtistAliasRemoved
+                      ? "Removed artist name from filename."
+                      : "Suggested from filename — edit freely"
+                    : undefined
               }
             >
-              <input
-                id={`${artwork.id}-title`}
-                value={artwork.title}
-                onChange={(e) => patchTitle(e.target.value)}
-                className={inputClass}
-              />
+              {artwork.isUntitled ? (
+                <p
+                  id={`${artwork.id}-title`}
+                  className={`${inputClass} text-[var(--ink)]`}
+                >
+                  {UNTITLED_TITLE}
+                </p>
+              ) : (
+                <input
+                  id={`${artwork.id}-title`}
+                  value={artwork.title}
+                  onChange={(e) => patchTitle(e.target.value)}
+                  className={inputClass}
+                />
+              )}
             </Field>
+            <label className="mt-2 flex items-start gap-2 text-sm text-[var(--ink)]">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={artwork.isUntitled}
+                onChange={(event) =>
+                  onChange(setArtworkUntitled(artwork, event.target.checked))
+                }
+              />
+              <span>Missing / no known title</span>
+            </label>
           </div>
           <div className="sm:col-span-1">
             <Field
@@ -308,7 +335,6 @@ export function ArtworkCard({
             <Field
               id={`${artwork.id}-height`}
               label="Height"
-              required
               error={errors?.height}
             >
               <input
@@ -324,7 +350,6 @@ export function ArtworkCard({
             <Field
               id={`${artwork.id}-width`}
               label="Width"
-              required
               error={errors?.width}
             >
               <input
@@ -340,7 +365,6 @@ export function ArtworkCard({
             <Field
               id={`${artwork.id}-unit`}
               label="Unit"
-              required
               error={errors?.dimensionUnit}
             >
               <select

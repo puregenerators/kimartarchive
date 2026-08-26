@@ -3,8 +3,10 @@ import "server-only";
 import { join } from "node:path";
 
 import { planFilenamesForArtwork } from "@/lib/artwork/filenames";
+import { getDropboxDirectImageUrl } from "@/lib/dropbox/direct-image-url";
 import { DropboxIntegrationError } from "@/lib/dropbox/errors";
 import { GoogleIntegrationError } from "@/lib/google/errors";
+import { buildSheetsImageFormula } from "@/lib/google/inventory-thumbnail";
 import {
   appendArtworkInventoryRow,
   updateInventoryClaimStatus,
@@ -27,7 +29,15 @@ import {
   failureProgress,
   messageForMasterUploadFailure,
 } from "@/lib/submission/failure-reporting";
+import {
+  emptyIntakeTimings,
+  formatIntakeTimings,
+} from "@/lib/submission/intake-diagnostics";
 import { buildArtworkInventoryRow } from "@/lib/submission/inventory-row";
+import {
+  firstFailedDerivativeUpload,
+  lastCompletedDerivativeUploadStage,
+} from "@/lib/submission/parallel-stages";
 import {
   removeTempDir,
   writeTempFile,
@@ -112,7 +122,8 @@ function mapProcessingError(error: unknown): {
       code === "DIMENSIONS_TOO_LARGE" ||
       code === "PIXEL_LIMIT_EXCEEDED" ||
       code === "TIMEOUT" ||
-      code === "SHARP_DECODE_FAILURE"
+      code === "SHARP_DECODE_FAILURE" ||
+      code === "THUMBNAIL_GENERATION_FAILED"
     ) {
       return { code: "IMAGE_PROCESSING_FAILED", message };
     }
@@ -197,6 +208,8 @@ export async function processOneArtwork(
   params: ProcessOneArtworkParams,
 ): Promise<ArtworkSubmissionResult> {
   const startedAt = isoNow();
+  const intakeStartedMs = Date.now();
+  const timings = emptyIntakeTimings();
   const metadata = resolveArtworkMetadata(params.artwork, params.shared);
   const cleanup = emptyCleanupResult();
   const warnings: ReconciliationWarning[] = [];
@@ -207,6 +220,7 @@ export async function processOneArtwork(
   let master: DriveResourceRef | null = null;
   let hr: DriveResourceRef | null = null;
   let web: DriveResourceRef | null = null;
+  let thumb: DriveResourceRef | null = null;
   let metadataFile: DriveResourceRef | null = null;
   let sheetRowWritten = false;
   let lastCompletedStage: ArtworkSubmissionStage = "claimed";
@@ -221,6 +235,7 @@ export async function processOneArtwork(
     master,
     hr,
     web,
+    thumb,
     metadata: metadataFile,
     sheetRowWritten,
     cleanup,
@@ -228,6 +243,21 @@ export async function processOneArtwork(
     finishedAt: isoNow(),
     reconciliationWarnings: warnings,
   });
+
+  const logIntakeTimings = () => {
+    timings.totalIntakeMs = Date.now() - intakeStartedMs;
+    logSubmissionEvent({
+      event: "intake_timings",
+      submissionAttemptId: params.submissionAttemptId,
+      clientArtworkId: params.artwork.clientArtworkId,
+      inventoryId: params.claim.inventoryId,
+      claimId: params.claim.claimId,
+      lastCompletedStage,
+      detail: `${formatIntakeTimings(timings)}; source_decode=once_to_raw`,
+      durationMs: timings.totalIntakeMs,
+      timings,
+    });
+  };
 
   const fail = async (
     errorCode: SubmissionErrorCode,
@@ -271,6 +301,7 @@ export async function processOneArtwork(
       failedOperation,
     });
 
+    logIntakeTimings();
     logSubmissionEvent({
       event: "artwork_failed",
       submissionAttemptId: params.submissionAttemptId,
@@ -291,6 +322,7 @@ export async function processOneArtwork(
         masterId: master?.id,
         hrId: hr?.id,
         webId: web?.id,
+        thumbId: thumb?.id,
         metadataId: metadataFile?.id,
       },
       detail: [message, options?.causeDetail].filter(Boolean).join(" | "),
@@ -399,41 +431,78 @@ export async function processOneArtwork(
     );
   }
 
-  // 3. Upload master (original bytes preserved)
-  try {
-    if (!params.sourceBytes.length) {
-      return fail(
-        "MISSING_FILE",
-        messageForMasterUploadFailure("temp_missing"),
-        "upload_master",
-        { normalizedErrorCode: "EMPTY_SOURCE_BYTES" },
-      );
-    }
-
-    const masterPath = await writeTempFile(
-      params.artworkTempDir,
-      planned.master,
-      params.sourceBytes,
+  // 3–4. Upload master and generate HR/web/thumb concurrently.
+  // Generation uses in-memory sourceBytes and does not depend on the uploaded master.
+  if (!params.sourceBytes.length) {
+    return fail(
+      "MISSING_FILE",
+      messageForMasterUploadFailure("temp_missing"),
+      "upload_master",
+      { normalizedErrorCode: "EMPTY_SOURCE_BYTES" },
     );
-    await assertTempFileReadable(masterPath);
+  }
 
-    logSubmissionEvent({
-      event: "operation",
-      submissionAttemptId: params.submissionAttemptId,
-      clientArtworkId: params.artwork.clientArtworkId,
-      inventoryId: params.claim.inventoryId,
-      claimId: params.claim.claimId,
-      lastCompletedStage,
-      nextOperation: "upload_master",
-      detail: `masterFilename=${planned.master}; bytes=${params.sourceBytes.length}`,
-    });
+  const masterPromise = (async () => {
+    const uploadStarted = Date.now();
+    try {
+      const masterPath = await writeTempFile(
+        params.artworkTempDir,
+        planned.master,
+        params.sourceBytes,
+      );
+      await assertTempFileReadable(masterPath);
 
-    master = await params.storage.uploadFile({
-      parentId: driveFolder!.id,
-      name: planned.master,
-      mimeType: mimeForFilename(planned.master),
-      contents: params.sourceBytes,
+      logSubmissionEvent({
+        event: "operation",
+        submissionAttemptId: params.submissionAttemptId,
+        clientArtworkId: params.artwork.clientArtworkId,
+        inventoryId: params.claim.inventoryId,
+        claimId: params.claim.claimId,
+        lastCompletedStage,
+        nextOperation: "upload_master",
+        detail: `masterFilename=${planned.master}; bytes=${params.sourceBytes.length}`,
+      });
+
+      const uploaded = await params.storage.uploadFile({
+        parentId: driveFolder!.id,
+        name: planned.master,
+        mimeType: mimeForFilename(planned.master),
+        contents: params.sourceBytes,
+      });
+      return { uploaded, ms: Date.now() - uploadStarted };
+    } catch (error) {
+      timings.dropboxMasterUploadMs = Date.now() - uploadStarted;
+      throw error;
+    }
+  })();
+
+  const generatePromise = (async () => {
+    const processed = await processArtworkImage({
+      sourceBytes: params.sourceBytes,
+      originalFilename:
+        params.artwork.originalFilename || params.sourceFile.name,
+      plannedFilenames: {
+        master: planned.master,
+        hr: planned.hr,
+        web: planned.web,
+        thumb: planned.thumb,
+      },
     });
+    timings.masterReadDecodeMs = processed.timings.masterReadDecodeMs;
+    timings.hrGenerationMs = processed.timings.hrGenerationMs;
+    timings.webGenerationMs = processed.timings.webGenerationMs;
+    timings.thumbnailGenerationMs = processed.timings.thumbnailGenerationMs;
+    return processed;
+  })();
+
+  const [masterSettled, generateSettled] = await Promise.allSettled([
+    masterPromise,
+    generatePromise,
+  ]);
+
+  if (masterSettled.status === "fulfilled") {
+    timings.dropboxMasterUploadMs = masterSettled.value.ms;
+    master = masterSettled.value.uploaded;
     lastCompletedStage = "master_uploaded";
     logSubmissionEvent({
       event: "stage",
@@ -445,33 +514,11 @@ export async function processOneArtwork(
       lastCompletedStage,
       nextOperation: "generate_derivatives",
       resourceIds: { masterId: master.id },
-    });
-  } catch (error) {
-    const classified = classifyMasterUploadError(error);
-    return fail(classified.code, classified.message, "upload_master", {
-      httpStatus: classified.httpStatus,
-      googleReason: classified.googleReason,
-      causeDetail: classified.causeDetail,
-      normalizedErrorCode: classified.kind,
+      durationMs: timings.dropboxMasterUploadMs,
     });
   }
 
-  // 4. Generate derivatives
-  let hrBuffer: Buffer;
-  let webBuffer: Buffer;
-  try {
-    const processed = await processArtworkImage({
-      sourceBytes: params.sourceBytes,
-      originalFilename:
-        params.artwork.originalFilename || params.sourceFile.name,
-      plannedFilenames: {
-        master: planned.master,
-        hr: planned.hr,
-        web: planned.web,
-      },
-    });
-    hrBuffer = processed.hr.buffer;
-    webBuffer = processed.web.buffer;
+  if (generateSettled.status === "fulfilled" && master) {
     lastCompletedStage = "derivatives_generated";
     logSubmissionEvent({
       event: "stage",
@@ -483,74 +530,164 @@ export async function processOneArtwork(
       lastCompletedStage,
       nextOperation: "upload_hr",
     });
-  } catch (error) {
-    const mapped = mapProcessingError(error);
-    return fail(mapped.code, mapped.message, "generate_derivatives");
   }
 
-  // 5. Upload HR
-  try {
-    // Development-only fault injection (no-op unless explicitly configured).
-    maybeThrowTestFault({
-      operation: "upload_high_resolution",
-      artworkIndex: params.artwork.order,
+  if (masterSettled.status === "rejected") {
+    const classified = classifyMasterUploadError(masterSettled.reason);
+    return fail(classified.code, classified.message, "upload_master", {
+      httpStatus: classified.httpStatus,
+      googleReason: classified.googleReason,
+      causeDetail: classified.causeDetail,
+      normalizedErrorCode: classified.kind,
     });
-    await writeTempFile(params.artworkTempDir, planned.hr, hrBuffer);
-    const uploaded = await params.storage.uploadFile({
-      parentId: driveFolder!.id,
-      name: planned.hr,
-      mimeType: "image/jpeg",
-      contents: hrBuffer,
-    });
-    hrBuffer = Buffer.alloc(0); // release
-    hr = uploaded;
-    lastCompletedStage = "hr_uploaded";
-  } catch (error) {
-    if (error instanceof TestFaultInjectionError) {
-      return fail("DRIVE_UPLOAD_FAILED", error.message, "upload_hr", {
-        causeDetail: error.code,
-        normalizedErrorCode: error.code,
+  }
+
+  if (generateSettled.status === "rejected") {
+    const error = generateSettled.reason;
+    const mapped = mapProcessingError(error);
+    const thumbnailFailed =
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      String((error as { code: string }).code) === "THUMBNAIL_GENERATION_FAILED";
+    return fail(
+      mapped.code,
+      mapped.message,
+      thumbnailFailed ? "generate_thumbnail" : "generate_derivatives",
+    );
+  }
+
+  let hrBuffer = generateSettled.value.hr.buffer;
+  let webBuffer = generateSettled.value.web.buffer;
+  let thumbBuffer = generateSettled.value.thumb.buffer;
+
+  // 5. Upload HR, web, and thumbnail concurrently once files are ready.
+  const derivativeUploadsStarted = Date.now();
+  const [hrSettled, webSettled, thumbSettled] = await Promise.allSettled([
+    (async () => {
+      maybeThrowTestFault({
+        operation: "upload_high_resolution",
+        artworkIndex: params.artwork.order,
       });
+      await writeTempFile(params.artworkTempDir, planned.hr, hrBuffer);
+      return params.storage.uploadFile({
+        parentId: driveFolder!.id,
+        name: planned.hr,
+        mimeType: "image/jpeg",
+        contents: hrBuffer,
+      });
+    })(),
+    (async () => {
+      await writeTempFile(params.artworkTempDir, planned.web, webBuffer);
+      return params.storage.uploadFile({
+        parentId: driveFolder!.id,
+        name: planned.web,
+        mimeType: "image/jpeg",
+        contents: webBuffer,
+      });
+    })(),
+    (async () => {
+      maybeThrowTestFault({
+        operation: "upload_thumb",
+        artworkIndex: params.artwork.order,
+      });
+      await writeTempFile(params.artworkTempDir, planned.thumb, thumbBuffer);
+      const uploaded = await params.storage.uploadFile({
+        parentId: driveFolder!.id,
+        name: planned.thumb,
+        mimeType: "image/jpeg",
+        contents: thumbBuffer,
+      });
+      const directUrl = getDropboxDirectImageUrl(uploaded.webViewLink);
+      if (!directUrl) {
+        throw new Error(
+          "The thumbnail uploaded, but Dropbox did not return a shared link that Google Sheets can load as an image.",
+        );
+      }
+      return {
+        uploaded,
+        thumbnailFormula: buildSheetsImageFormula(directUrl),
+      };
+    })(),
+  ]);
+  timings.dropboxDerivativeUploadsMs = Date.now() - derivativeUploadsStarted;
+
+  if (hrSettled.status === "fulfilled") hr = hrSettled.value;
+  if (webSettled.status === "fulfilled") web = webSettled.value;
+  if (thumbSettled.status === "fulfilled") thumb = thumbSettled.value.uploaded;
+
+  lastCompletedStage = lastCompletedDerivativeUploadStage({
+    hr: Boolean(hr),
+    web: Boolean(web),
+    thumb: Boolean(thumb),
+    previous: lastCompletedStage,
+  });
+
+  const failedUpload = firstFailedDerivativeUpload({
+    hr: hrSettled.status === "rejected" ? hrSettled.reason : undefined,
+    web: webSettled.status === "rejected" ? webSettled.reason : undefined,
+    thumb: thumbSettled.status === "rejected" ? thumbSettled.reason : undefined,
+  });
+
+  if (failedUpload) {
+    if (failedUpload.error instanceof TestFaultInjectionError) {
+      return fail(
+        "DRIVE_UPLOAD_FAILED",
+        failedUpload.error.message,
+        failedUpload.operation,
+        {
+          causeDetail: failedUpload.error.code,
+          normalizedErrorCode: failedUpload.error.code,
+        },
+      );
     }
-    const mapped = mapProcessingError(error);
-    return fail("DRIVE_UPLOAD_FAILED", mapped.message, "upload_hr", {
+    const mapped = mapProcessingError(failedUpload.error);
+    const message =
+      failedUpload.operation === "upload_thumb" &&
+      failedUpload.error instanceof Error
+        ? failedUpload.error.message
+        : mapped.message;
+    return fail("DRIVE_UPLOAD_FAILED", message, failedUpload.operation, {
       httpStatus: mapped.httpStatus,
       googleReason: mapped.googleReason,
       causeDetail: mapped.causeDetail,
     });
   }
 
-  // 6. Upload web
-  try {
-    await writeTempFile(params.artworkTempDir, planned.web, webBuffer);
-    const uploaded = await params.storage.uploadFile({
-      parentId: driveFolder!.id,
-      name: planned.web,
-      mimeType: "image/jpeg",
-      contents: webBuffer,
-    });
-    webBuffer = Buffer.alloc(0);
-    web = uploaded;
-    lastCompletedStage = "web_uploaded";
-    logSubmissionEvent({
-      event: "stage",
-      submissionAttemptId: params.submissionAttemptId,
-      clientArtworkId: params.artwork.clientArtworkId,
-      inventoryId: params.claim.inventoryId,
-      claimId: params.claim.claimId,
-      stage: "web_uploaded",
-      lastCompletedStage,
-      nextOperation: "upload_metadata",
-      resourceIds: { webId: web.id },
-    });
-  } catch (error) {
-    const mapped = mapProcessingError(error);
-    return fail("DRIVE_UPLOAD_FAILED", mapped.message, "upload_web", {
-      httpStatus: mapped.httpStatus,
-      googleReason: mapped.googleReason,
-      causeDetail: mapped.causeDetail,
-    });
+  if (
+    hrSettled.status !== "fulfilled" ||
+    webSettled.status !== "fulfilled" ||
+    thumbSettled.status !== "fulfilled"
+  ) {
+    return fail(
+      "DRIVE_UPLOAD_FAILED",
+      "A derivative image could not be uploaded.",
+      "upload_hr",
+    );
   }
+
+  hrBuffer = Buffer.alloc(0);
+  webBuffer = Buffer.alloc(0);
+  thumbBuffer = Buffer.alloc(0);
+
+  const thumbnailFormula = thumbSettled.value.thumbnailFormula;
+  lastCompletedStage = "thumb_uploaded";
+  logSubmissionEvent({
+    event: "stage",
+    submissionAttemptId: params.submissionAttemptId,
+    clientArtworkId: params.artwork.clientArtworkId,
+    inventoryId: params.claim.inventoryId,
+    claimId: params.claim.claimId,
+    stage: "thumb_uploaded",
+    lastCompletedStage,
+    nextOperation: "upload_metadata",
+    resourceIds: {
+      hrId: hr?.id,
+      webId: web?.id,
+      thumbId: thumb?.id,
+    },
+    durationMs: timings.dropboxDerivativeUploadsMs,
+  });
 
   // 7. Generate + upload portable metadata file (before Sheet append)
   const createdAt = isoNow();
@@ -561,6 +698,7 @@ export async function processOneArtwork(
       master: master!,
       hr: hr!,
       web: web!,
+      thumb: thumb!,
       folder: driveFolder!,
       metadataFilename: planned.metadata,
       createdAt,
@@ -606,11 +744,11 @@ export async function processOneArtwork(
     const mapped = mapProcessingError(error);
     warnings.push({
       code: "DRIVE_FILES_WITHOUT_METADATA",
-      message: `Master, high-resolution, and web images uploaded successfully, but ${planned.metadata} could not be created or uploaded.`,
+      message: `Master, high-resolution, web, and thumbnail images uploaded successfully, but ${planned.metadata} could not be created or uploaded.`,
     });
     return fail(
       "DRIVE_UPLOAD_FAILED",
-      `The master, high-resolution, and web images uploaded successfully, but ${planned.metadata} could not be created or uploaded. The claimed Inventory ID, artwork folder, and image files are preserved for safe retry. ${mapped.message}`,
+      `The master, high-resolution, web, and thumbnail images uploaded successfully, but ${planned.metadata} could not be created or uploaded. The claimed Inventory ID, artwork folder, and image files are preserved for safe retry. ${mapped.message}`,
       "upload_metadata",
       {
         httpStatus: mapped.httpStatus,
@@ -621,6 +759,7 @@ export async function processOneArtwork(
   }
 
   // 8. Append inventory row (only after images + metadata exist)
+  const sheetsStarted = Date.now();
   try {
     const row = buildArtworkInventoryRow({
       inventoryId: params.claim.inventoryId,
@@ -634,13 +773,16 @@ export async function processOneArtwork(
         webFileUrl: web!.webViewLink,
         artworkFolderUrl: driveFolder!.webViewLink,
       },
+      thumbnailFormula,
       createdAt,
     });
     // Do not blindly retry appends
     await appendArtworkInventoryRow(row, params.spreadsheetId);
+    timings.sheetsAppendMs = Date.now() - sheetsStarted;
     sheetRowWritten = true;
     lastCompletedStage = "sheet_row_appended";
   } catch (error) {
+    timings.sheetsAppendMs = Date.now() - sheetsStarted;
     const mapped = mapProcessingError(error);
     warnings.push({
       code: "DRIVE_FILES_WITHOUT_INVENTORY_ROW",
@@ -689,11 +831,13 @@ export async function processOneArtwork(
         masterId: master!.id,
         hrId: hr!.id,
         webId: web!.id,
+        thumbId: thumb!.id,
         metadataId: metadataFile!.id,
       },
       detail: completedMark.reason,
     });
 
+    logIntakeTimings();
     const result: ArtworkSubmissionSuccess = {
       ok: true,
       ...base(),
@@ -704,6 +848,7 @@ export async function processOneArtwork(
       master: master!,
       hr: hr!,
       web: web!,
+      thumb: thumb!,
       metadata: metadataFile!,
       sheetRowWritten: true,
       claimStatus: "Processing",
@@ -727,10 +872,12 @@ export async function processOneArtwork(
       masterId: master!.id,
       hrId: hr!.id,
       webId: web!.id,
+      thumbId: thumb!.id,
       metadataId: metadataFile!.id,
     },
   });
 
+  logIntakeTimings();
   return {
     ok: true,
     ...base(),
@@ -741,6 +888,7 @@ export async function processOneArtwork(
     master: master!,
     hr: hr!,
     web: web!,
+    thumb: thumb!,
     metadata: metadataFile!,
     sheetRowWritten: true,
     claimStatus: "Completed",

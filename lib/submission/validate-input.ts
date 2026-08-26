@@ -11,6 +11,11 @@ import {
   type BatchDraft,
   type BatchSharedDetails,
 } from "@/lib/artwork/types";
+import {
+  UNTITLED_TITLE,
+  isUntitledArtwork,
+  resolveArtworkTitle,
+} from "@/lib/artwork/untitled";
 import { isSupportedImageFile } from "@/lib/artwork/validation";
 import type {
   ArtworkBatchSubmissionInput,
@@ -47,42 +52,54 @@ function validateArtworkInput(
   if (!artwork.clientArtworkId.trim()) {
     return "Each artwork requires a stable client ID.";
   }
-  if (!artwork.title.trim()) {
+  if (!isUntitledArtwork(artwork) && !artwork.title.trim()) {
     return `Artwork order ${artwork.order}: Title is required.`;
   }
+  const label = resolveArtworkTitle(artwork) || artwork.title;
   if (!/^\d{4}$/.test(artwork.year.trim())) {
-    return `Artwork “${artwork.title}”: Year must be four digits.`;
+    return `Artwork “${label}”: Year must be four digits.`;
   }
   const mediumError = validateMediumValue(artwork.medium);
   if (mediumError) {
-    return `Artwork “${artwork.title}”: ${mediumError.replace(/\.$/, "")}.`;
+    return `Artwork “${label}”: ${mediumError.replace(/\.$/, "")}.`;
   }
-  if (!isPositiveNumber(artwork.height)) {
-    return `Artwork “${artwork.title}”: Height must be a positive number.`;
+  if (artwork.height.trim() && !isPositiveNumber(artwork.height)) {
+    return `Artwork “${label}”: Height must be a positive number when provided.`;
   }
-  if (!isPositiveNumber(artwork.width)) {
-    return `Artwork “${artwork.title}”: Width must be a positive number.`;
+  if (artwork.width.trim() && !isPositiveNumber(artwork.width)) {
+    return `Artwork “${label}”: Width must be a positive number when provided.`;
   }
   if (artwork.depth.trim() && !isPositiveNumber(artwork.depth)) {
-    return `Artwork “${artwork.title}”: Depth must be a positive number when provided.`;
+    return `Artwork “${label}”: Depth must be a positive number when provided.`;
   }
   if (
     !DIMENSION_UNITS.includes(
       artwork.dimensionUnit as (typeof DIMENSION_UNITS)[number],
     )
   ) {
-    return `Artwork “${artwork.title}”: Dimension unit is invalid.`;
+    return `Artwork “${label}”: Dimension unit is invalid.`;
   }
   if (!file) {
-    return `Artwork “${artwork.title}”: Exactly one source image is required.`;
+    return `Artwork “${label}”: Exactly one source image is required.`;
   }
   if (!isSupportedImageFile(file)) {
-    return `Artwork “${artwork.title}”: Source must be TIFF, JPEG, or PNG.`;
+    return `Artwork “${label}”: Source must be TIFF, JPEG, or PNG.`;
   }
   if (file.size > MAX_FILE_BYTES) {
-    return `Artwork “${artwork.title}”: Source file exceeds the 250 MB limit.`;
+    return `Artwork “${label}”: Source file exceeds the 250 MB limit.`;
   }
   return null;
+}
+
+function resolveSubmissionArtwork(
+  artwork: ArtworkSubmissionInput,
+): ArtworkSubmissionInput {
+  const { isUntitled, ...rest } = artwork;
+  return {
+    ...rest,
+    title: isUntitled === true ? UNTITLED_TITLE : artwork.title.trim(),
+    medium: normalizeMedium(artwork.medium),
+  };
 }
 
 /**
@@ -170,10 +187,7 @@ export function validateSubmissionBatch(params: {
       submissionAttemptId: attemptId,
       shared: params.shared,
       artworks: [...params.artworks]
-        .map((artwork) => ({
-          ...artwork,
-          medium: normalizeMedium(artwork.medium),
-        }))
+        .map(resolveSubmissionArtwork)
         .sort((a, b) => a.order - b.order),
     },
     filesByArtworkId,
@@ -188,7 +202,8 @@ export function draftsToSubmissionArtworks(
   return artworks.map((artwork, order) => ({
     clientArtworkId: artwork.id,
     order,
-    title: artwork.title,
+    title: resolveArtworkTitle(artwork) || artwork.title,
+    ...(isUntitledArtwork(artwork) ? { isUntitled: true as const } : {}),
     year: artwork.year,
     medium: normalizeMedium(artwork.medium),
     height: artwork.height,

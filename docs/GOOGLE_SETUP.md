@@ -7,6 +7,8 @@ How to connect this app to Google Sheets (and legacy Drive tooling) using a serv
 - **Google Sheets** — permanent artwork **metadata** store
 - **Dropbox** — permanent artwork **file** archive (see `docs/DROPBOX_SETUP.md`)
 
+The visual archive at `/artworks` reads the Artwork Inventory sheet on every page load. See `docs/ARTWORK_ARCHIVE.md`.
+
 Google Drive remains available as **legacy file storage** when `ARTWORK_STORAGE_PROVIDER=drive`. With the default Dropbox backend, `GOOGLE_DRIVE_ROOT_FOLDER_ID` is optional. New archive setup lives at `/setup/archive`.
 
 **Never commit** the downloaded JSON key file, `.env`, or `.env.local`.
@@ -98,7 +100,7 @@ Notes:
 - When `ARTWORK_SUBMISSION_TARGET=test`, `GOOGLE_TEST_SHEET_ID` is required. `GOOGLE_TEST_DRIVE_ROOT_FOLDER_ID` is required only with Drive storage. The app **never** silently falls back to production IDs.
 - Permanent submission writes to the active archive target. See `docs/SUBMISSION_PIPELINE.md`.
 
-Optional later (not required for Google setup):
+Required for the app gate (production fails closed if missing):
 
 ```bash
 APP_ACCESS_PASSWORD=
@@ -115,11 +117,15 @@ Create these tabs in the spreadsheet if they do not exist:
 
 The app **will not** silently create missing tabs. It can initialize **blank** header rows after you confirm on the diagnostic page.
 
-Expected `Artwork Inventory` header order (21 columns):
+Expected `Artwork Inventory` header order (22 columns):
 
 ```text
-Inventory ID	Title	Year	Medium	Height	Width	Depth	Dimension Unit	Photographer	Exhibition	Gallery / Venue	Notes	Master Filename	Master File URL	High Resolution Filename	High Resolution File URL	Web Filename	Web File URL	Artwork Folder URL	Created At	Updated At
+Inventory ID	Thumbnail	Title	Year	Medium	Height	Width	Depth	Dimension Unit	Photographer	Exhibition	Gallery / Venue	Notes	Master Filename	Master File URL	High Resolution Filename	High Resolution File URL	Web Filename	Web File URL	Artwork Folder URL	Created At	Updated At
 ```
+
+`Thumbnail` is a display-only `IMAGE()` formula. It is not artwork metadata. Do not add Thumbnail Filename or Thumbnail URL columns.
+
+If an existing spreadsheet is still on the 21-column schema (no Thumbnail), insert the column from **Google Setup** or run `npx tsx scripts/migrate-insert-thumbnail.ts` before the next live intake. Existing rows stay aligned with a blank Thumbnail cell; this does not backfill images.
 
 Series, Edition, Status, and Location are not part of this schema. Physical location and ownership are managed after intake, not during new-artwork processing.
 
@@ -185,5 +191,5 @@ Explicit confirmed actions:
 - Do **not** commit `.env` / `.env.local`.
 - Do **not** expose credentials via `NEXT_PUBLIC_*`.
 - Do **not** log private keys, tokens, or full credential objects.
-- `/setup/google` and `/setup/archive` are local development tooling; add auth before any public deployment.
+- `/setup/google` and `/setup/archive` are gated by the shared app password (`APP_ACCESS_PASSWORD`). They remain powerful diagnostics — keep the password private.
 - Do not confuse Sheets (metadata) with Dropbox (files). Both must be ready for a complete archive.

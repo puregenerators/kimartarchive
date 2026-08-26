@@ -18,7 +18,9 @@ import {
 import {
   generateHrJpegBuffer,
   generateWebJpegBuffer,
+  generateThumbJpegBuffer,
   mapSharpFormatToSupported,
+  orientedPixelSize,
   processArtworkImage,
   readArtworkSourceMetadata,
   validateArtworkSourceImage,
@@ -104,6 +106,10 @@ const tests: TestCase[] = [
       assert(
         isSafePlannedFilename("2026_KO_1000_BlueGarden_web_01.jpg"),
         "valid web",
+      );
+      assert(
+        isSafePlannedFilename("2026_KO_1000_BlueGarden_thumb_01.jpg"),
+        "valid thumb",
       );
       assert(
         isSafePlannedFilename("2026_KO_1000_BlueGarden_master_01.tif"),
@@ -228,12 +234,19 @@ const tests: TestCase[] = [
           master: "2026_KO_1000_Study_master_01.png",
           hr: "2026_KO_1000_Study_hr_01.jpg",
           web: "2026_KO_1000_Study_web_01.jpg",
+          thumb: "2026_KO_1000_Study_thumb_01.jpg",
         },
       });
 
       assertEqual(result.source.detectedFormat, "png", "format");
       assertEqual(result.hr.format, "jpeg", "hr format");
       assertEqual(result.web.format, "jpeg", "web format");
+      assertEqual(result.thumb.format, "jpeg", "thumb format");
+      assertEqual(
+        result.thumb.filename,
+        "2026_KO_1000_Study_thumb_01.jpg",
+        "thumb name",
+      );
       assertEqual(
         result.hr.quality,
         IMAGE_PROCESSING_CONFIG.hr.quality,
@@ -254,6 +267,109 @@ const tests: TestCase[] = [
         result.hr.buffer[0] === 0xff && result.hr.buffer[1] === 0xd8,
         "jpeg soi",
       );
+      assert(typeof result.timings.masterReadDecodeMs === "number", "decode ms");
+      assert(typeof result.timings.hrGenerationMs === "number", "hr ms");
+      assert(typeof result.timings.webGenerationMs === "number", "web ms");
+      assert(
+        typeof result.timings.thumbnailGenerationMs === "number",
+        "thumb ms",
+      );
+      assert(result.timings.derivativesWallMs >= 0, "wall ms");
+    },
+  },
+  {
+    name: "processArtworkImage matches standalone generators from the same source",
+    run: async () => {
+      const png = await solidPng(2000, 1000);
+      const processed = await processArtworkImage({
+        sourceBytes: png,
+        originalFilename: "wide.png",
+        plannedFilenames: {
+          master: "2026_KO_1000_Wide_master_01.png",
+          hr: "2026_KO_1000_Wide_hr_01.jpg",
+          web: "2026_KO_1000_Wide_web_01.jpg",
+          thumb: "2026_KO_1000_Wide_thumb_01.jpg",
+        },
+      });
+      const hr = await generateHrJpegBuffer(png, true);
+      const web = await generateWebJpegBuffer(png, true, 2000, 1000);
+      const thumb = await generateThumbJpegBuffer(png, true, 2000, 1000);
+
+      assertEqual(processed.hr.width, hr.info.width, "hr width");
+      assertEqual(processed.hr.height, hr.info.height, "hr height");
+      assertEqual(processed.web.width, web.info.width, "web width");
+      assertEqual(processed.web.height, web.info.height, "web height");
+      assertEqual(processed.thumb.width, thumb.info.width, "thumb width");
+      assertEqual(processed.thumb.height, thumb.info.height, "thumb height");
+      assertEqual(processed.thumb.width, 500, "thumb long edge");
+      assert(processed.hr.quality === IMAGE_PROCESSING_CONFIG.hr.quality, "hr q");
+      assert(processed.web.quality === IMAGE_PROCESSING_CONFIG.web.quality, "web q");
+    },
+  },
+  {
+    name: "processArtworkImage applies EXIF orientation before derivative resize",
+    run: async () => {
+      const jpeg = await jpegWithOrientation(40, 20, 6);
+      const result = await processArtworkImage({
+        sourceBytes: jpeg,
+        originalFilename: "rotated.jpg",
+        plannedFilenames: {
+          master: "2026_KO_1000_Rotated_master_01.jpg",
+          hr: "2026_KO_1000_Rotated_hr_01.jpg",
+          web: "2026_KO_1000_Rotated_web_01.jpg",
+          thumb: "2026_KO_1000_Rotated_thumb_01.jpg",
+        },
+      });
+      assertEqual(result.hr.width, 20, "hr oriented width");
+      assertEqual(result.hr.height, 40, "hr oriented height");
+      assertEqual(result.web.width, 20, "web oriented width");
+      assertEqual(result.thumb.height, 40, "thumb keeps small oriented size");
+    },
+  },
+  {
+    name: "orientedPixelSize swaps axes for EXIF orientations 5-8",
+    run: () => {
+      assertEqual(orientedPixelSize(40, 20, 1).width, 40, "orient 1 width");
+      assertEqual(orientedPixelSize(40, 20, 1).height, 20, "orient 1 height");
+      assertEqual(orientedPixelSize(40, 20, 6).width, 20, "orient 6 width");
+      assertEqual(orientedPixelSize(40, 20, 6).height, 40, "orient 6 height");
+      assertEqual(orientedPixelSize(40, 20, null).width, 40, "null width");
+    },
+  },
+  {
+    name: "thumbnail longest edge is 500px and landscape aspect is preserved",
+    run: async () => {
+      const png = await solidPng(2000, 1000);
+      const result = await generateThumbJpegBuffer(png, true, 2000, 1000);
+      assert(result.wasResized, "resized");
+      assertEqual(result.info.width, 500, "thumb width");
+      assertEqual(result.info.height, 250, "thumb height");
+      assertEqual(result.info.format, "jpeg", "thumb jpeg");
+      assert(
+        result.info.width / result.info.height === 2000 / 1000,
+        "landscape ratio",
+      );
+    },
+  },
+  {
+    name: "thumbnail portrait remains portrait and is not cropped",
+    run: async () => {
+      const png = await solidPng(800, 1600);
+      const result = await generateThumbJpegBuffer(png, true, 800, 1600);
+      assert(result.wasResized, "resized");
+      assertEqual(result.info.width, 250, "thumb width");
+      assertEqual(result.info.height, 500, "thumb height");
+      assert(result.info.height > result.info.width, "still portrait");
+    },
+  },
+  {
+    name: "thumbnail does not enlarge a small source",
+    run: async () => {
+      const png = await solidPng(320, 240);
+      const result = await generateThumbJpegBuffer(png, true, 320, 240);
+      assert(!result.wasResized, "not resized");
+      assertEqual(result.info.width, 320, "width kept");
+      assertEqual(result.info.height, 240, "height kept");
     },
   },
   {
@@ -361,6 +477,7 @@ const tests: TestCase[] = [
           master: "2026_KO_1000_Multi_master_01.tif",
           hr: "2026_KO_1000_Multi_hr_01.jpg",
           web: "2026_KO_1000_Multi_web_01.jpg",
+          thumb: "2026_KO_1000_Multi_thumb_01.jpg",
         },
       });
 

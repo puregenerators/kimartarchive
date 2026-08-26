@@ -6,6 +6,7 @@
 
 import { NextResponse } from "next/server";
 
+import { unauthorizedApiResponse } from "@/lib/auth/access";
 import {
   discardTempResult,
   getTempPreviewAsset,
@@ -21,6 +22,9 @@ type RouteContext = {
 };
 
 export async function GET(_request: Request, context: RouteContext) {
+  const denied = await unauthorizedApiResponse();
+  if (denied) return denied;
+
   const { resultId } = await context.params;
   const result = await getTempPreviewAsset(resultId);
   if (!result) {
@@ -52,6 +56,9 @@ export async function GET(_request: Request, context: RouteContext) {
 
 /** Client cleanup when a TIFF is replaced, removed, or the batch is reset. */
 export async function DELETE(_request: Request, context: RouteContext) {
+  const denied = await unauthorizedApiResponse();
+  if (denied) return denied;
+
   const { resultId } = await context.params;
   await discardTempResult(resultId);
   return NextResponse.json({ ok: true as const });

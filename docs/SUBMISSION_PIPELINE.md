@@ -4,8 +4,9 @@ This app is a **temporary processing and delivery tool**. After a successful sub
 
 - permanent files live in **Dropbox** (default storage backend; legacy Google Drive remains available via `ARTWORK_STORAGE_PROVIDER=drive`), including a portable `{inventoryId}_metadata.json` beside each artwork’s images
 - permanent inventory metadata also lives in **Google Sheets** (primary database)
+- `/artworks` is a visual read-only layer over that Sheet (see `docs/ARTWORK_ARCHIVE.md`); the app does not store a second copy of artwork records
 - temporary local image files and form state are **disposable**
-- the app is **not** an archive or database
+- the app is **not** a database
 
 Notion dashboard publishing is planned but **not implemented**.
 
@@ -106,16 +107,17 @@ Order per artwork:
 
 1. Mark claim `Processing`
 2. Create artwork folder (direct child of configured archive root)
-3. Upload master (original bytes preserved)
-4. Generate HR + web JPGs via existing Sharp module (unchanged settings)
-5. Upload HR JPG
-6. Upload web JPG
-7. Generate and upload portable `{inventoryId}_metadata.json`
-8. Append one complete `Artwork Inventory` row
-9. Mark claim `Completed`
-10. Delete temporary local files
+3. Upload master (original bytes preserved) **concurrently with** HR / web / thumbnail generation
+4. Generate HR, web, and thumbnail JPGs concurrently from one decoded master pixel buffer (HR/web settings unchanged; thumbnail is produced from the original source, not from the HR or web JPEG)
+5. Upload HR, web, and thumbnail JPGs concurrently
+6. Generate and upload portable `{inventoryId}_metadata.json`
+7. Append one complete `Artwork Inventory` row (Thumbnail cell is an `IMAGE()` formula)
+8. Mark claim `Completed`
+9. Delete temporary local files
 
-Do **not** append the inventory row until all three image files and the metadata file exist.
+Master upload may overlap derivative generation because generation reads the in-memory source bytes. Folder creation, inventory claim, metadata upload, final folder move, and Sheets append stay sequential — they have real ordering dependencies.
+
+Do **not** append the inventory row until all four image files and the metadata file exist.
 
 Artwork folder layout (flat under root — no year subfolder, no Original/Derivatives subfolders):
 
@@ -125,6 +127,7 @@ Kim Artwork Archive/
     ├── 2026_KO_1000_BlueGarden_master_01.tif
     ├── 2026_KO_1000_BlueGarden_hr_01.jpg
     ├── 2026_KO_1000_BlueGarden_web_01.jpg
+    ├── 2026_KO_1000_BlueGarden_thumb_01.jpg
     └── 1000_metadata.json
 ```
 
@@ -215,7 +218,9 @@ Favor reconciliation warnings over duplicate data.
 
 Structured server logs include: submission-attempt ID, artwork stable ID, inventory ID, claim ID, stage transitions, `lastCompletedStage`, `failedOperation` / `nextOperation`, created Google resource IDs, safe error codes, normalized error codes, Google HTTP status / reason when available, outcomes.
 
-Failure responses separate **last completed stage** from **failed operation**. Example: folder created then master upload rejected → `lastCompletedStage=folder_created`, `failedOperation=upload_master` (never `master_uploaded` unless the master file exists in Drive).
+An `intake_timings` log line records approximate milliseconds for master read/decode, HR / web / thumbnail generation, Dropbox master upload, Dropbox derivative uploads, Sheets append, and total intake. These are server/dev diagnostics only and are not written as artwork metadata.
+
+Failure responses separate **last completed stage** from **failed operation**. Example: folder created then master upload rejected → `lastCompletedStage=folder_created`, `failedOperation=upload_master` (never `master_uploaded` unless the master file exists in Drive). Concurrent derivative generation or upload failures still name the specific operation (`generate_thumbnail`, `upload_hr`, `upload_web`, or `upload_thumb`).
 
 Never log: private keys, tokens, credentials, image bytes, derivative buffers, raw multipart bodies.
 
@@ -227,10 +232,26 @@ Never log: private keys, tokens, credentials, image bytes, derivative buffers, r
 2. Initialize headers and `Failed Intake` via `/setup/google` against those test resources (or mirror setup manually).
 3. Confirm diagnostics show **TEST** target and Editor access.
 4. Submit a **1-artwork** batch with a small JPEG.
-5. Verify: one claim Completed, one inventory row, one artwork folder with three image files plus `{inventoryId}_metadata.json`, no public permissions changes.
+5. Verify: one claim Completed, one inventory row, one artwork folder with four image files plus `{inventoryId}_metadata.json`, no public permissions changes.
 6. Submit a deliberate failure case (e.g. conflict by pre-creating the folder name) and confirm Failed claim + Failed Intake move.
 7. Only then try a small multi-artwork batch.
 8. Do not point `ARTWORK_SUBMISSION_TARGET=production` until test results are reviewed.
+
+---
+
+## Production hosting limits (Vercel)
+
+Intake uploads the **entire master file** in `POST /api/artwork-batches/submit`. That request is a Vercel Function.
+
+| Constraint | Current limit | Consequence |
+| --- | --- | --- |
+| Request body | **4.5 MB** (platform hard limit) | JPEG/PNG under this size can complete intake. Representative TIFFs generally cannot. |
+| Duration | `maxDuration = 300` (5 minutes) | Sequential Sharp + Dropbox of a large batch can still time out. |
+| Memory | 2 GB Hobby / up to 4 GB Pro | High-megapixel TIFF decode can still fail. |
+
+A successful deploy does **not** mean TIFF intake is production-ready. Do not send irreplaceable masters through this path. Direct-to-Dropbox (or similar) upload is still required before production-scale TIFF intake.
+
+API upload routes are excluded from Next.js Proxy so Proxy’s 10 MB body buffer does not truncate masters. Those routes still verify the access cookie themselves.
 
 Production hosting for large uploads (especially 250 MB TIFFs on Vercel) remains **unresolved**.
 

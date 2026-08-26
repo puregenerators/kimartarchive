@@ -55,9 +55,32 @@ export const IMAGE_PROCESSING_CONFIG = {
   },
 
   /**
+   * Archival convenience thumbnail stored in the artwork Dropbox folder
+   * and rendered in the Artwork Inventory Thumbnail cell.
+   * Not a canonical metadata field. Never crop; never enlarge.
+   */
+  thumb: {
+    quality: 84,
+    progressive: true,
+    maxLongEdge: 500,
+    neverEnlarge: true as const,
+    flattenBackground: { r: 255, g: 255, b: 255 },
+    colourspace: "srgb" as const,
+    kernel: "lanczos3" as const,
+    /**
+     * Same mild output sharpening as the web derivative, only when resized.
+     */
+    sharpenWhenResized: {
+      sigma: 0.5,
+      m1: 0.5,
+      m2: 0.4,
+    },
+  },
+
+  /**
    * Temporary UI-only JPEG thumbnails (e.g. browser TIFF previews).
    * Not archival. Never upload these to Dropbox or write them to Sheets.
-   * Kept separate from HR / web derivative settings above.
+   * Kept separate from HR / web / archival-thumb derivative settings above.
    */
   preview: {
     maxWidth: 600,

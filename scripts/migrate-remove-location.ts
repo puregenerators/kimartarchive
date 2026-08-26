@@ -79,7 +79,7 @@ async function main() {
   }
 
   if (plan.alreadyMigrated) {
-    console.log("Already on the new 21-column schema. No changes made.");
+    console.log("Location already removed. No changes made.");
     console.log("Headers:", ARTWORK_INVENTORY_HEADERS.join(" | "));
     return;
   }
