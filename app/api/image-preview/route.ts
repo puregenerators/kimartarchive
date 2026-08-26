@@ -79,7 +79,7 @@ export async function POST(request: Request) {
       return jsonError(
         400,
         "FILE_TOO_LARGE",
-        "Source file exceeds the 250 MB limit.",
+        "Source file exceeds the 150 MB limit.",
         artworkId,
       );
     }

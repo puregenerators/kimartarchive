@@ -3,9 +3,11 @@
  * Refine after visual testing with Kim’s actual master files.
  */
 
+import { MAX_FILE_BYTES } from "@/lib/artwork/types";
+
 export const IMAGE_PROCESSING_CONFIG = {
-  /** Maximum accepted source file size (product limit). */
-  maxSourceBytes: 250 * 1024 * 1024,
+  /** Maximum accepted source file size (current production upload cap). */
+  maxSourceBytes: MAX_FILE_BYTES,
 
   /**
    * Maximum decoded pixel count (width × height after orientation).

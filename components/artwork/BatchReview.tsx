@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { BatchSubmissionReport } from "@/components/artwork/BatchSubmissionReport";
-import { BatchSubmittingStatusView } from "@/components/artwork/BatchSubmittingStatusView";
+import { BatchSubmittingStatusView, type IntakeProgressItem } from "@/components/artwork/BatchSubmittingStatusView";
 import { FilenameDisplay } from "@/components/artwork/FilenameDisplay";
 import {
   ArtworkImageThumb,
@@ -41,7 +41,12 @@ import {
 import {
   batchDraftToSubmissionPayload,
 } from "@/lib/submission/validate-input";
-import type { BatchSubmissionResult } from "@/lib/submission/types";
+import { uploadMasterToTemporaryLink } from "@/lib/submission/browser-master-upload";
+import type { PreparedArtwork } from "@/lib/submission/direct-intake-types";
+import type {
+  ArtworkSubmissionResult,
+  BatchSubmissionResult,
+} from "@/lib/submission/types";
 
 type ArchiveTargetProp = "test" | "production" | "invalid";
 
@@ -434,11 +439,15 @@ export function BatchReview({
   const [submitting, setSubmitting] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [intakeProgress, setIntakeProgress] = useState<IntakeProgressItem[]>(
+    [],
+  );
   const [submissionResult, setSubmissionResult] = useState<Extract<
     BatchSubmissionResult,
     { ok: true }
   > | null>(null);
   const attemptIdRef = useRef<string | null>(null);
+  const preparedRef = useRef<PreparedArtwork[] | null>(null);
   const submitStartedRef = useRef<number | null>(null);
 
   const anyBusy = artworks.some(
@@ -476,7 +485,9 @@ export function BatchReview({
   }
 
   function openConfirm() {
-    attemptIdRef.current = crypto.randomUUID();
+    if (!attemptIdRef.current) {
+      attemptIdRef.current = crypto.randomUUID();
+    }
     setConfirmed(false);
     setSubmitError(null);
     setConfirmOpen(true);
@@ -490,41 +501,250 @@ export function BatchReview({
     setConfirmOpen(false);
     submitStartedRef.current = Date.now();
     setElapsedSec(0);
+    setIntakeProgress(
+      artworks.map((artwork) => ({
+        title: artwork.title || "Untitled",
+        stage: "Preparing inventory claims…",
+        percent: null,
+        error: null,
+      })),
+    );
 
     const payload = batchDraftToSubmissionPayload({ shared, artworks });
-    const body = new FormData();
-    body.set("submissionAttemptId", attemptIdRef.current);
-    body.set("shared", JSON.stringify(payload.shared));
-    body.set("artworks", JSON.stringify(payload.artworks));
+    const files = artworks.flatMap((artwork) =>
+      artwork.image
+        ? [
+            {
+              clientArtworkId: artwork.id,
+              filename: artwork.image.file.name,
+              mimeType: artwork.image.file.type,
+              byteLength: artwork.image.file.size,
+            },
+          ]
+        : [],
+    );
+    const filesById = new Map(
+      artworks
+        .filter((artwork) => artwork.image)
+        .map((artwork) => [artwork.id, artwork.image!.file]),
+    );
 
-    for (const artwork of artworks) {
-      if (!artwork.image) continue;
-      body.set(`file:${artwork.id}`, artwork.image.file);
-    }
+    const setItem = (
+      clientArtworkId: string,
+      title: string,
+      patch: Partial<IntakeProgressItem>,
+    ) => {
+      setIntakeProgress((current) => {
+        const next = [...current];
+        const index = next.findIndex((item) => item.title === title);
+        const item: IntakeProgressItem = {
+          title,
+          stage: patch.stage ?? next[index]?.stage ?? "Starting…",
+          percent: patch.percent ?? next[index]?.percent ?? null,
+          error: patch.error ?? next[index]?.error ?? null,
+        };
+        if (index >= 0) next[index] = item;
+        else next.push(item);
+        void clientArtworkId;
+        return next;
+      });
+    };
 
     try {
-      const response = await fetch("/api/artwork-batches/submit", {
+      const prepareResponse = await fetch("/api/artwork-batches/prepare", {
         method: "POST",
-        body,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          submissionAttemptId: attemptIdRef.current,
+          shared: payload.shared,
+          artworks: payload.artworks,
+          files,
+          retryClaims: (preparedRef.current ?? []).map((entry) => ({
+            clientArtworkId: entry.clientArtworkId,
+            claimId: entry.claimId,
+            inventoryId: entry.inventoryId,
+          })),
+        }),
       });
-      const data = (await response.json()) as BatchSubmissionResult;
+      const prepared = (await prepareResponse.json()) as
+        | {
+            ok: true;
+            kind: "prepared";
+            submissionAttemptId: string;
+            archiveTarget: "test" | "production";
+            sheetUrl: string | null;
+            driveRootUrl: string | null;
+            artworks: PreparedArtwork[];
+          }
+        | Extract<BatchSubmissionResult, { ok: false }>;
 
-      if (!data.ok) {
-        setSubmitError(data.message);
+      if (!prepared.ok) {
+        setSubmitError(prepared.message);
         setSubmitting(false);
-        // Keep the attempt ID — reuse is rejected on purpose; user must start a new confirm.
-        attemptIdRef.current = null;
+        if (prepared.kind === "duplicate_attempt") {
+          attemptIdRef.current = crypto.randomUUID();
+          preparedRef.current = null;
+        }
         return;
       }
 
-      setSubmissionResult(data);
+      preparedRef.current = prepared.artworks;
+      const results: ArtworkSubmissionResult[] = [];
+
+      for (const ready of prepared.artworks) {
+        const artwork = payload.artworks.find(
+          (entry) => entry.clientArtworkId === ready.clientArtworkId,
+        );
+        const file = filesById.get(ready.clientArtworkId);
+        const title =
+          artworks.find((entry) => entry.id === ready.clientArtworkId)?.title ||
+          ready.masterFilename;
+        if (!artwork || !file) {
+          setItem(ready.clientArtworkId, title, {
+            stage: "Failed",
+            error: "Source file is missing from this browser session.",
+          });
+          continue;
+        }
+
+        setItem(ready.clientArtworkId, title, {
+          stage: ready.masterAlreadyUploaded
+            ? "Master already in Dropbox"
+            : "Requesting upload link…",
+          percent: ready.masterAlreadyUploaded ? 1 : 0,
+          error: null,
+        });
+
+        const linkResponse = await fetch("/api/artwork-batches/upload-link", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            claimId: ready.claimId,
+            inventoryId: ready.inventoryId,
+            clientArtworkId: ready.clientArtworkId,
+            filename: ready.masterFilename,
+            dropboxPath: ready.masterPath,
+            mimeType: file.type,
+            byteLength: file.size,
+            year: artwork.year,
+            title: artwork.title,
+            originalFilename: artwork.originalFilename,
+          }),
+        });
+        const linkJson = (await linkResponse.json()) as
+          | {
+              ok: true;
+              alreadyUploaded: boolean;
+              uploadUrl?: string;
+            }
+          | { ok: false; message: string };
+
+        if (!linkJson.ok) {
+          setItem(ready.clientArtworkId, title, {
+            stage: "Upload link failed",
+            error: linkJson.message,
+          });
+          continue;
+        }
+
+        if (!linkJson.alreadyUploaded) {
+          if (!linkJson.uploadUrl) {
+            setItem(ready.clientArtworkId, title, {
+              stage: "Upload link failed",
+              error: "Dropbox did not return an upload link.",
+            });
+            continue;
+          }
+          setItem(ready.clientArtworkId, title, {
+            stage: "Uploading master to Dropbox…",
+            percent: 0,
+          });
+          try {
+            await uploadMasterToTemporaryLink({
+              uploadUrl: linkJson.uploadUrl,
+              file,
+              onProgress: (ratio) => {
+                setItem(ready.clientArtworkId, title, {
+                  stage: "Uploading master to Dropbox…",
+                  percent: ratio,
+                });
+              },
+            });
+          } catch (error) {
+            setItem(ready.clientArtworkId, title, {
+              stage: "Master upload failed",
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Dropbox rejected the master upload.",
+            });
+            continue;
+          }
+        }
+
+        setItem(ready.clientArtworkId, title, {
+          stage: "Generating derivatives…",
+          percent: 1,
+        });
+
+        const processResponse = await fetch("/api/artwork-batches/process", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            submissionAttemptId: attemptIdRef.current,
+            artwork,
+            shared: payload.shared,
+            claimId: ready.claimId,
+            inventoryId: ready.inventoryId,
+            dropboxPath: ready.masterPath,
+          }),
+        });
+        const processResult =
+          (await processResponse.json()) as ArtworkSubmissionResult;
+        results.push(processResult);
+        setItem(ready.clientArtworkId, title, {
+          stage: processResult.ok
+            ? "Completed"
+            : processResult.message || "Processing failed",
+          percent: 1,
+          error: processResult.ok ? null : processResult.message,
+        });
+      }
+
+      const completed = results.filter(
+        (result) => result.ok && result.stage === "completed",
+      ).length;
+      const reconciliationRequired = results.filter(
+        (result) => result.ok && result.stage === "reconciliation_required",
+      ).length;
+      const failed = results.filter((result) => !result.ok).length;
+
+      if (results.length === 0) {
+        setSubmitError("No artworks were processed. Check the upload errors and retry.");
+        setSubmitting(false);
+        return;
+      }
+
+      setSubmissionResult({
+        ok: true,
+        kind: "completed",
+        submissionAttemptId: prepared.submissionAttemptId,
+        archiveTarget: prepared.archiveTarget,
+        completedAt: new Date().toISOString(),
+        total: results.length,
+        completed,
+        failed,
+        reconciliationRequired,
+        artworks: results,
+        sheetUrl: prepared.sheetUrl,
+        driveRootUrl: prepared.driveRootUrl,
+      });
       setSubmitting(false);
     } catch {
       setSubmitError(
-        "Could not reach the submission endpoint. Refreshing or losing the connection during submission may require checking Inventory Claims and Failed Intake before starting a new attempt.",
+        "Could not finish submission. The master may already be in Dropbox. Retry processing before starting a new attempt.",
       );
       setSubmitting(false);
-      attemptIdRef.current = null;
     }
   }
 
@@ -571,6 +791,7 @@ export function BatchReview({
         <BatchSubmittingStatusView
           artworkCount={artworks.length}
           elapsedSec={elapsedSec}
+          items={intakeProgress}
         >
           {sharedHasValues(shared) ? (
             <div className="mt-4 border-t border-[var(--accent)] pt-3">

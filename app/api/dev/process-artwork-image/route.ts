@@ -20,7 +20,7 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Local-dev allowance for large TIFF masters (product limit 250 MB + multipart overhead). */
+/** Local-dev allowance for large TIFF masters (product limit 150 MB + multipart overhead). */
 export const maxDuration = 300;
 
 function jsonError(
@@ -92,7 +92,7 @@ export async function POST(request: Request) {
       return jsonError(
         400,
         "FILE_TOO_LARGE",
-        "Source file exceeds the 250 MB limit.",
+        "Source file exceeds the 150 MB limit.",
         artworkId,
       );
     }

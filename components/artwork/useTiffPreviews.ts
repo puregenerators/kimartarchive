@@ -8,6 +8,8 @@ import {
   buildSourceFileFingerprint,
   clearAllTiffPreviewState,
   clearTiffPreviewState,
+  shouldSkipTiffUiPreviewUpload,
+  tiffUiPreviewSkippedMessage,
   type ImagePreviewApiFailure,
   type ImagePreviewApiSuccess,
   type TiffPreviewState,
@@ -205,6 +207,38 @@ export function useTiffPreviews() {
       imageSize: artwork.image.file.size,
       imageLastModified: artwork.image.file.lastModified,
     });
+
+    if (shouldSkipTiffUiPreviewUpload(artwork.image.file.size)) {
+      const existing = previewRef.current[artwork.id];
+      if (
+        existing?.status === "error" &&
+        existing.fingerprint === fingerprint
+      ) {
+        return;
+      }
+      if (existing?.status === "ready" && existing.fingerprint !== fingerprint) {
+        void fetch(`/api/image-preview/${existing.resultId}`, {
+          method: "DELETE",
+        }).catch(() => undefined);
+      }
+      queueRef.current?.cancel(artwork.id);
+      pendingJobsRef.current = pendingJobsRef.current.filter(
+        (job) => job.id !== artwork.id,
+      );
+      setPreviewByArtworkId((current) => {
+        const next = {
+          ...current,
+          [artwork.id]: {
+            status: "error" as const,
+            fingerprint,
+            message: tiffUiPreviewSkippedMessage(artwork.image!.file.name),
+          },
+        };
+        previewRef.current = next;
+        return next;
+      });
+      return;
+    }
 
     const existing = previewRef.current[artwork.id];
     if (

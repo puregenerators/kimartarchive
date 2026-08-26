@@ -12,7 +12,7 @@ export const APP_NAV_ITEMS = [
   },
   {
     href: "/new-artwork",
-    label: "New Artwork Batch",
+    label: "Add New Artwork",
     match: (path: string) => path.startsWith("/new-artwork"),
   },
   {

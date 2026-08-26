@@ -47,11 +47,17 @@ function createMockOps(
     async deleteFolder(path) {
       paths.delete(path);
     },
-    async uploadBuffer(path, contents) {
+    async uploadBuffer(path, contents, options) {
       const buf =
         typeof contents === "string"
           ? Buffer.from(contents, "utf8")
           : Buffer.from(contents);
+      if (options?.mode === "add" && (paths.has(path) || files.has(path))) {
+        throw new DropboxIntegrationError({
+          code: "PATH_ERROR",
+          message: "path/conflict/file",
+        });
+      }
       files.set(path, buf);
       paths.add(path);
       return {
@@ -99,6 +105,27 @@ function createMockOps(
         });
       }
       return Buffer.from(buf);
+    },
+    async downloadFileToPath(path, destPath) {
+      const { writeFile } = await import("node:fs/promises");
+      const buf = files.get(path);
+      if (!buf) {
+        throw new DropboxIntegrationError({
+          code: "PATH_ERROR",
+          message: "path/not_found/",
+        });
+      }
+      await writeFile(destPath, buf);
+      return { size: buf.byteLength };
+    },
+    async getTemporaryUploadLink(params) {
+      if (!params.path.startsWith("/")) {
+        throw new DropboxIntegrationError({
+          code: "PATH_ERROR",
+          message: "invalid path",
+        });
+      }
+      return { link: `https://content.dropboxapi.com/apitul/1/${encodeURIComponent(params.path)}` };
     },
     async deleteFile(path) {
       files.delete(path);

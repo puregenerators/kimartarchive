@@ -7,6 +7,7 @@ import {
   MAX_ARTWORKS_PER_BATCH,
   MAX_BATCH_BYTES,
   MAX_FILE_BYTES,
+  MAX_FILE_SIZE_LABEL,
   type ArtworkDraft,
   type BatchDraft,
   type BatchSharedDetails,
@@ -86,7 +87,7 @@ function validateArtworkInput(
     return `Artwork “${label}”: Source must be TIFF, JPEG, or PNG.`;
   }
   if (file.size > MAX_FILE_BYTES) {
-    return `Artwork “${label}”: Source file exceeds the 250 MB limit.`;
+    return `Artwork “${label}”: Source file exceeds the ${MAX_FILE_SIZE_LABEL} limit.`;
   }
   return null;
 }
@@ -192,6 +193,57 @@ export function validateSubmissionBatch(params: {
     },
     filesByArtworkId,
     totalBytes,
+  };
+}
+
+export type DeclaredArtworkFileInput = {
+  clientArtworkId: string;
+  filename: string;
+  mimeType: string;
+  byteLength: number;
+};
+
+/**
+ * Server-side batch validation for the direct-to-Dropbox path.
+ * Declared size/type are checked here; master bytes never reach this function.
+ */
+export function validateSubmissionBatchDeclared(params: {
+  submissionAttemptId: string;
+  shared: ArtworkBatchSubmissionInput["shared"];
+  artworks: ArtworkSubmissionInput[];
+  files: DeclaredArtworkFileInput[];
+}):
+  | {
+      ok: true;
+      input: ArtworkBatchSubmissionInput;
+      filesByArtworkId: Map<string, DeclaredArtworkFileInput>;
+      totalBytes: number;
+    }
+  | ServerBatchValidationFailure {
+  const files: ServerArtworkFile[] = params.files.map((file) => ({
+    clientArtworkId: file.clientArtworkId,
+    file: {
+      name: file.filename,
+      type: file.mimeType,
+      size: file.byteLength,
+    } as File,
+  }));
+  const validated = validateSubmissionBatch({
+    submissionAttemptId: params.submissionAttemptId,
+    shared: params.shared,
+    artworks: params.artworks,
+    files,
+  });
+  if (!validated.ok) return validated;
+  const filesByArtworkId = new Map<string, DeclaredArtworkFileInput>();
+  for (const file of params.files) {
+    filesByArtworkId.set(file.clientArtworkId, file);
+  }
+  return {
+    ok: true,
+    input: validated.input,
+    filesByArtworkId,
+    totalBytes: validated.totalBytes,
   };
 }
 

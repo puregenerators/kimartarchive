@@ -8,16 +8,27 @@ import type {
  * These are the helpers the artwork submission pipeline will call later.
  * Kept free of `server-only` so unit tests can mock this surface.
  */
+export type DropboxUploadMode = "add" | "overwrite";
+
 export type DropboxFilesOps = {
   createFolder: (path: string) => Promise<{ pathDisplay: string }>;
   deleteFolder: (path: string) => Promise<void>;
   uploadBuffer: (
     path: string,
     contents: Buffer | Uint8Array | string,
+    options?: { mode?: DropboxUploadMode },
   ) => Promise<{ pathDisplay: string; id: string; name: string; size: number }>;
   downloadFile: (path: string) => Promise<Buffer>;
+  downloadFileToPath: (
+    path: string,
+    destPath: string,
+  ) => Promise<{ size: number }>;
   getMetadata: (path: string) => Promise<DropboxFileMetadata>;
   createSharedLink: (path: string) => Promise<DropboxSharedLink>;
+  getTemporaryUploadLink: (params: {
+    path: string;
+    durationSeconds: number;
+  }) => Promise<{ link: string }>;
   deleteFile: (path: string) => Promise<void>;
   /** Move a file or folder (e.g. artwork folder → Failed Intake). */
   movePath: (

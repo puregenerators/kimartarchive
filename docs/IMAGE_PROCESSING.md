@@ -2,11 +2,11 @@
 
 Sharp derivative generation is used in three places:
 
-1. **UI TIFF thumbnails** — `POST /api/image-preview` creates temporary JPEG thumbnails so the intake UI can show TIFF masters (browsers cannot render TIFF natively).
+1. **UI TIFF thumbnails** — `POST /api/image-preview` creates temporary JPEG thumbnails so the intake UI can show TIFF masters (browsers cannot render TIFF natively). TIFFs larger than the 4.5 MB Function body limit skip this POST and show a filename/type placeholder instead.
 2. **Dev preview** — `/api/dev/process-artwork-image` for local visual testing from the review screen (temporary OS temp files only).
-3. **Permanent submission** — `POST /api/artwork-batches/submit` regenerates HR/web/thumbnail server-side during delivery (does not reuse client preview results).
+3. **Permanent submission** — JSON prepare + direct Dropbox upload + `POST /api/artwork-batches/process` regenerates HR/web/thumbnail server-side from the Dropbox master (does not reuse client preview results).
 
-During submission (and the local dev preview), Sharp reads source metadata and decodes the master **once** into an in-memory raw pixel buffer. HR, web, and thumbnail are then encoded concurrently from that buffer. Sharp `.clone()` is not used for this: it shares the compressed input but still decodes independently per pipeline. The thumbnail is **not** produced by decoding the HR or web JPEG.
+During submission (and the local dev preview), Sharp reads source metadata and decodes the master **once** into an in-memory raw pixel buffer. HR, web, and thumbnail are then encoded **sequentially** from that buffer. Sharp `.clone()` is not used for this: it shares the compressed input but still decodes independently per pipeline. The thumbnail is **not** produced by decoding the HR or web JPEG.
 
 Derivative settings live only in `lib/images/config.ts` and must not be duplicated in submission code. Preview thumbnail settings are a **separate** `preview` block and must not be mixed with HR / web / archival-thumb settings. See `docs/SUBMISSION_PIPELINE.md` for delivery.
 
@@ -24,7 +24,7 @@ Derivative settings live only in `lib/images/config.ts` and must not be duplicat
 | JPEG | `.jpg`, `.jpeg` | Browser preview via object URL |
 | PNG | `.png` | Transparency flattened to white |
 
-- Maximum source size: **250 MB**
+- Maximum source size: **150 MB**
 - Format is determined with **Sharp metadata**, not the filename extension alone
 - Unsupported or unreadable files return a clear structured error
 
@@ -34,7 +34,7 @@ Derivative settings live only in `lib/images/config.ts` and must not be duplicat
 
 Before generating derivatives or UI thumbnails, the server:
 
-1. Rejects empty files and files over 250 MB
+1. Rejects empty files and files over 150 MB
 2. Decodes metadata with Sharp (`failOn: "error"`)
 3. Confirms the detected format is jpeg / png / tiff
 4. Requires width and height
@@ -267,5 +267,5 @@ TIFF UI thumbnails are keyed only by artwork id + source file identity (name, si
 - Local-only; not the final submission pipeline
 - Large masters may stress machine memory/CPU; timeout is 5 minutes
 - UI TIFF thumbnails require the local preview endpoint; if generation fails, a placeholder remains and submission is not blocked
-- Production upload architecture for large TIFFs remains unresolved (see `ARTWORK_INTAKE_SPEC.md` §12). Vercel Function request bodies are capped at **4.5 MB**; this path cannot accept 250 MB masters.
+- Production masters upload directly to Dropbox (≤ **150 MB**). Vercel process functions download a file-backed copy and must not receive master bytes in the request body.
 - Settings are provisional pending visual QA with Kim’s files

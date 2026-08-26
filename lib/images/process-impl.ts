@@ -62,13 +62,14 @@ export type ValidateSourceOptions = {
  * Does not trust the filename extension alone.
  */
 export async function validateArtworkSourceImage(
-  sourceBytes: Buffer,
+  source: ArtworkImageSource,
   options: ValidateSourceOptions,
 ): Promise<{
   metadata: SharpMetadata;
   detectedFormat: SupportedArtworkImageFormat;
 }> {
-  if (!sourceBytes.length) {
+  const isPath = typeof source === "string";
+  if (!isPath && !source.length) {
     throw new ArtworkImageProcessingError(
       "CORRUPTED_IMAGE",
       "The uploaded file is empty.",
@@ -78,13 +79,13 @@ export async function validateArtworkSourceImage(
   if (options.byteLength > IMAGE_PROCESSING_CONFIG.maxSourceBytes) {
     throw new ArtworkImageProcessingError(
       "FILE_TOO_LARGE",
-      `Source file exceeds the 250 MB limit (${formatBytes(options.byteLength)}).`,
+      `Source file exceeds the 150 MB limit (${formatBytes(options.byteLength)}).`,
     );
   }
 
   let metadata: SharpMetadata;
   try {
-    metadata = await sharp(sourceBytes, {
+    metadata = await sharp(source, {
       failOn: "error",
       // Only ever read page 0 for multi-page TIFF masters in this milestone.
       pages: 1,
@@ -183,8 +184,10 @@ export function orientedPixelSize(
   return { width, height };
 }
 
-function createBasePipeline(sourceBytes: Buffer): SharpInstance {
-  return sharp(sourceBytes, {
+export type ArtworkImageSource = Buffer | string;
+
+function createBasePipeline(source: ArtworkImageSource): SharpInstance {
+  return sharp(source, {
     failOn: "error",
     pages: 1,
     page: 0,
@@ -203,10 +206,10 @@ function applyFlatten(pipeline: SharpInstance, hasAlpha: boolean): SharpInstance
 }
 
 function createSharedSourcePipeline(
-  sourceBytes: Buffer,
+  source: ArtworkImageSource,
   hasAlpha: boolean,
 ): SharpInstance {
-  return applyFlatten(createBasePipeline(sourceBytes), hasAlpha);
+  return applyFlatten(createBasePipeline(source), hasAlpha);
 }
 
 type SharpChannels = 1 | 2 | 3 | 4;
@@ -224,11 +227,11 @@ type DecodedSourcePixels = {
  * decodes independently — materializing raw pixels is the reuse Sharp allows.
  */
 async function decodeSourcePixels(
-  sourceBytes: Buffer,
+  source: ArtworkImageSource,
   hasAlpha: boolean,
 ): Promise<DecodedSourcePixels> {
   const { data, info } = await createSharedSourcePipeline(
-    sourceBytes,
+    source,
     hasAlpha,
   )
     .raw()
@@ -383,14 +386,40 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 export type ProcessArtworkImageInput = {
-  sourceBytes: Buffer;
+  sourceBytes?: Buffer;
+  /** File-backed master path. Preferred in production so Sharp can read from disk. */
+  sourcePath?: string;
+  /** Declared or stat'd byte length when `sourcePath` is used. */
+  sourceByteLength?: number;
   originalFilename: string;
   plannedFilenames: PlannedFilenamesInput;
 };
 
+function resolveArtworkImageSource(
+  input: ProcessArtworkImageInput,
+): { source: ArtworkImageSource; byteLength: number } {
+  if (input.sourcePath) {
+    return {
+      source: input.sourcePath,
+      byteLength: input.sourceByteLength ?? input.sourceBytes?.byteLength ?? 0,
+    };
+  }
+  if (input.sourceBytes) {
+    return {
+      source: input.sourceBytes,
+      byteLength: input.sourceBytes.byteLength,
+    };
+  }
+  throw new ArtworkImageProcessingError(
+    "CORRUPTED_IMAGE",
+    "The uploaded file is empty.",
+  );
+}
+
 /**
  * Process one artwork source image into HR, web, and thumbnail JPG buffers.
  * Master bytes are preserved as-is (not rewritten).
+ * HR, web, and thumbnail are encoded sequentially from one decoded buffer.
  */
 export async function processArtworkImage(
   input: ProcessArtworkImageInput,
@@ -412,17 +441,32 @@ async function processArtworkImageInner(
   started: number,
 ): Promise<ArtworkImageProcessingResult> {
   const readStarted = Date.now();
+  const resolved = resolveArtworkImageSource(input);
+  const byteLength =
+    resolved.byteLength > 0
+      ? resolved.byteLength
+      : Buffer.isBuffer(resolved.source)
+        ? resolved.source.byteLength
+        : 0;
+
+  if (typeof resolved.source === "string" && byteLength <= 0) {
+    throw new ArtworkImageProcessingError(
+      "CORRUPTED_IMAGE",
+      "The uploaded file is empty.",
+    );
+  }
+
   const { metadata, detectedFormat } = await validateArtworkSourceImage(
-    input.sourceBytes,
+    resolved.source,
     {
       originalFilename: input.originalFilename,
-      byteLength: input.sourceBytes.byteLength,
+      byteLength,
     },
   );
 
   const source = readArtworkSourceMetadata(metadata, detectedFormat, {
     originalFilename: input.originalFilename,
-    originalByteLength: input.sourceBytes.byteLength,
+    originalByteLength: byteLength,
   });
 
   const warnings: string[] = [];
@@ -433,50 +477,51 @@ async function processArtworkImageInner(
   }
 
   const decoded = await decodeSourcePixels(
-    input.sourceBytes,
+    resolved.source,
     source.hasAlpha,
   );
   const masterReadDecodeMs = Date.now() - readStarted;
 
   const derivativesStarted = Date.now();
-  const [hrSettled, webSettled, thumbSettled] = await Promise.allSettled([
-    timed(encodeHrJpeg(pipelineFromDecodedPixels(decoded))),
-    timed(
+  let hrTimed: { value: Awaited<ReturnType<typeof encodeHrJpeg>>; ms: number };
+  let webTimed: {
+    value: Awaited<ReturnType<typeof encodeLongEdgeJpeg>>;
+    ms: number;
+  };
+  let thumbTimed: {
+    value: Awaited<ReturnType<typeof encodeLongEdgeJpeg>>;
+    ms: number;
+  };
+  try {
+    hrTimed = await timed(encodeHrJpeg(pipelineFromDecodedPixels(decoded)));
+    webTimed = await timed(
       encodeLongEdgeJpeg(
         pipelineFromDecodedPixels(decoded),
         IMAGE_PROCESSING_CONFIG.web,
         decoded.width,
         decoded.height,
       ),
-    ),
-    timed(
-      encodeLongEdgeJpeg(
-        pipelineFromDecodedPixels(decoded),
-        IMAGE_PROCESSING_CONFIG.thumb,
-        decoded.width,
-        decoded.height,
-      ),
-    ),
-  ]);
-  const derivativesWallMs = Date.now() - derivativesStarted;
-
-  if (hrSettled.status === "rejected") {
-    throw mapImageProcessingError(hrSettled.reason);
-  }
-  if (webSettled.status === "rejected") {
-    throw mapImageProcessingError(webSettled.reason);
-  }
-  if (thumbSettled.status === "rejected") {
-    const mapped = mapImageProcessingError(thumbSettled.reason);
-    throw new ArtworkImageProcessingError(
-      "THUMBNAIL_GENERATION_FAILED",
-      mapped.message,
     );
+    try {
+      thumbTimed = await timed(
+        encodeLongEdgeJpeg(
+          pipelineFromDecodedPixels(decoded),
+          IMAGE_PROCESSING_CONFIG.thumb,
+          decoded.width,
+          decoded.height,
+        ),
+      );
+    } catch (error) {
+      const mapped = mapImageProcessingError(error);
+      throw new ArtworkImageProcessingError(
+        "THUMBNAIL_GENERATION_FAILED",
+        mapped.message,
+      );
+    }
+  } catch (error) {
+    throw mapImageProcessingError(error);
   }
-
-  const hrTimed = hrSettled.value;
-  const webTimed = webSettled.value;
-  const thumbTimed = thumbSettled.value;
+  const derivativesWallMs = Date.now() - derivativesStarted;
   const hrResult = hrTimed.value;
   const webResult = webTimed.value;
   const thumbResult = thumbTimed.value;
@@ -523,7 +568,7 @@ async function processArtworkImageInner(
     master: {
       filename: input.plannedFilenames.master,
       extension: masterExt,
-      byteLength: input.sourceBytes.byteLength,
+      byteLength,
       preservedOriginalBytes: true,
     },
     hr,

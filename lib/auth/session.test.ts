@@ -141,6 +141,13 @@ const tests: TestCase[] = [
       assertEqual(isPublicAppPath("/login/"), true, "login slash");
       assertEqual(isPublicAppPath("/artworks"), false, "artworks");
       assertEqual(isPublicAppPath("/api/dev/process-artwork-image"), false, "dev api");
+      assertEqual(isPublicAppPath("/api/artwork-batches/prepare"), false, "prepare");
+      assertEqual(
+        isPublicAppPath("/api/artwork-batches/upload-link"),
+        false,
+        "upload-link",
+      );
+      assertEqual(isPublicAppPath("/api/artwork-batches/process"), false, "process");
       assertEqual(isPublicAppPath("/"), false, "home");
     },
   },

@@ -3,6 +3,23 @@
  * Preview results are never part of submission payloads.
  */
 
+/** Vercel serverless request body cap (`4.5 MB`). */
+export const VERCEL_FUNCTION_BODY_LIMIT_BYTES = Math.floor(4.5 * 1024 * 1024);
+
+/**
+ * Skip POSTing TIFF bytes to `/api/image-preview` above this size so the
+ * 4.5 MB Vercel body limit cannot be hit. Leaves headroom for multipart fields.
+ */
+export const TIFF_UI_PREVIEW_MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+
+export function shouldSkipTiffUiPreviewUpload(byteLength: number): boolean {
+  return byteLength > TIFF_UI_PREVIEW_MAX_UPLOAD_BYTES;
+}
+
+export function tiffUiPreviewSkippedMessage(fileName: string): string {
+  return `${fileName} (TIFF) — preview skipped for files over 4.5 MB. Intake can continue.`;
+}
+
 export type SourceFileFingerprintInput = {
   imageName: string;
   imageSize: number;

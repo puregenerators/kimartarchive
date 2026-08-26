@@ -51,6 +51,15 @@ export const DROPBOX_ARCHIVE_ROOT_API_PATH = "";
 /** Failed Intake folder directly under the App Folder root (same layout as Drive). */
 export const DROPBOX_FAILED_INTAKE_PATH = "/Failed Intake";
 
+/**
+ * Cross-instance inventory allocation lock (created with Dropbox mode=add).
+ * Not an artwork folder. Safe to steal if stale.
+ */
+export const DROPBOX_ALLOCATION_LOCK_PATH =
+  "/_system/inventory-allocation.lock";
+export const DROPBOX_ALLOCATION_LOCK_FOLDER = "/_system";
+export const DROPBOX_ALLOCATION_LOCK_STALE_MS = 30_000;
+
 /** API path "" is the App Folder root. Diagnostics use a nested temp folder. */
 export const DROPBOX_DIAGNOSTICS_FOLDER_PATH = "/.kimartarchive-diagnostics";
 
@@ -72,6 +81,8 @@ export type DropboxFileMetadata = {
   pathLower: string;
   size: number;
   isFolder: boolean;
+  /** ISO timestamp from Dropbox `client_modified` when present. */
+  clientModified?: string;
 };
 
 export type DropboxSharedLink = {

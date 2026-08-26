@@ -97,12 +97,18 @@ export function ArtworkImageThumb({
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-1 px-2 text-center">
+      <span
+        className="max-w-full break-all px-0.5 text-[10px] leading-tight text-[var(--ink)]"
+        title={image.file.name}
+      >
+        {image.file.name}
+      </span>
       <span className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
         TIFF
       </span>
       {isError ? (
         <span className="text-[9px] leading-snug text-[var(--muted)]">
-          Preview unavailable. The original TIFF can still be processed.
+          Preview unavailable. Intake can continue.
         </span>
       ) : (
         <span className="text-[10px] text-[var(--muted)]">Preview unavailable</span>

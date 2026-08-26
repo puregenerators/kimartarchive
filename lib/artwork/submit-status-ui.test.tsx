@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { BatchImageUploader } from "@/components/artwork/BatchImageUploader";
 import {
   BatchSubmittingStatusView,
   submittingWaitLabel,
@@ -45,11 +46,10 @@ const tests: TestCase[] = [
       );
       assert(markup.includes("Submitting 5 artworks"), "heading");
       assert(
-        markup.includes(
-          "This may take several minutes. Large TIFFs take time. Do not close this page.",
-        ),
-        "do-not-close copy",
+        markup.includes("Masters upload directly to Dropbox (up to 150 MB each)."),
+        "direct-upload copy",
       );
+      assert(markup.includes("Do not close this page."), "do-not-close copy");
       assert(
         markup.includes(
           "Elapsed 25s · exact per-artwork stage is not streamed live",
@@ -59,7 +59,16 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "progress bar and percentage text are gone",
+    name: "batch uploader displays the 150 MB per-file limit",
+    run: () => {
+      const markup = renderToStaticMarkup(
+        <BatchImageUploader onFilesSelected={() => undefined} />,
+      );
+      assert(markup.includes("up to 150 MB per"), "150 MB limit");
+    },
+  },
+  {
+    name: "progress bar is omitted until per-artwork upload items are provided",
     run: () => {
       const markup = renderToStaticMarkup(
         <BatchSubmittingStatusView artworkCount={5} elapsedSec={25} />,
@@ -95,6 +104,37 @@ const tests: TestCase[] = [
       const dots = markup.match(/class="submit-loading-dot"/g) ?? [];
       assertEqual(dots.length, 3, "three dots");
       assert(markup.includes("submit-loading-dots"), "dots container");
+    },
+  },
+  {
+    name: "per-artwork upload progress and failure copy are shown",
+    run: () => {
+      const markup = renderToStaticMarkup(
+        <BatchSubmittingStatusView
+          artworkCount={1}
+          elapsedSec={12}
+          items={[
+            {
+              title: "Blue Garden",
+              stage: "Uploading master to Dropbox…",
+              percent: 0.42,
+              error: null,
+            },
+            {
+              title: "Red Field",
+              stage: "Processing failed",
+              percent: 1,
+              error: "Derivative generation failed. Retry keeps this inventory ID.",
+            },
+          ]}
+        />,
+      );
+      assert(markup.includes("42% uploaded"), "upload percent");
+      assert(markup.includes("Uploading master to Dropbox…"), "upload stage");
+      assert(
+        markup.includes("Derivative generation failed. Retry keeps this inventory ID."),
+        "failure copy",
+      );
     },
   },
   {

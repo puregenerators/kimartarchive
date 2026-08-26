@@ -1,5 +1,10 @@
 import "server-only";
 
+import { createWriteStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+
 import {
   readDropboxCredentials,
   writeDropboxCredentials,
@@ -12,6 +17,7 @@ import {
   sanitizeDropboxErrorText,
 } from "@/lib/dropbox/errors";
 import { isDropboxSharedLinkAlreadyExistsError } from "@/lib/dropbox/direct-image-url";
+import type { DropboxUploadMode } from "@/lib/dropbox/files-ops";
 import { refreshAccessToken as oauthRefreshAccessToken } from "@/lib/dropbox/oauth";
 import type {
   DropboxAccountPublic,
@@ -46,14 +52,24 @@ export type DropboxClient = {
   uploadBuffer: (
     path: string,
     contents: Buffer | Uint8Array | string,
+    options?: { mode?: DropboxUploadMode },
   ) => Promise<{ pathDisplay: string; id: string; name: string; size: number }>;
   uploadFile: (
     path: string,
     contents: Buffer | Uint8Array | string,
+    options?: { mode?: DropboxUploadMode },
   ) => Promise<{ pathDisplay: string; id: string; name: string; size: number }>;
   getMetadata: (path: string) => Promise<DropboxFileMetadata>;
   downloadFile: (path: string) => Promise<Buffer>;
+  downloadFileToPath: (
+    path: string,
+    destPath: string,
+  ) => Promise<{ size: number }>;
   createSharedLink: (path: string) => Promise<DropboxSharedLink>;
+  getTemporaryUploadLink: (params: {
+    path: string;
+    durationSeconds: number;
+  }) => Promise<{ link: string }>;
   deleteFile: (path: string) => Promise<void>;
   deleteFolder: (path: string) => Promise<void>;
   deletePath: (path: string) => Promise<void>;
@@ -188,6 +204,7 @@ function parseFileMetadata(json: {
   path_lower?: string;
   size?: number;
   ".tag"?: string;
+  client_modified?: string;
 }): DropboxFileMetadata {
   return {
     id: json.id ?? "",
@@ -196,6 +213,7 @@ function parseFileMetadata(json: {
     pathLower: json.path_lower ?? "",
     size: typeof json.size === "number" ? json.size : 0,
     isFolder: json[".tag"] === "folder",
+    ...(json.client_modified ? { clientModified: json.client_modified } : {}),
   };
 }
 
@@ -233,6 +251,7 @@ export async function getDropboxClient(
   async function uploadFile(
     filePath: string,
     contents: Buffer | Uint8Array | string,
+    options?: { mode?: DropboxUploadMode },
   ) {
     return withToken(async (accessToken) => {
       const bytes =
@@ -253,9 +272,10 @@ export async function getDropboxClient(
             "Content-Type": "application/octet-stream",
             "Dropbox-API-Arg": JSON.stringify({
               path: filePath,
-              mode: "overwrite",
+              mode: options?.mode ?? "overwrite",
               autorename: false,
               mute: true,
+              strict_conflict: options?.mode === "add",
             }),
           },
           body: bytes,
@@ -372,6 +392,7 @@ export async function getDropboxClient(
           path_lower?: string;
           size?: number;
           ".tag"?: string;
+          client_modified?: string;
         }>(
           accessToken,
           "https://api.dropboxapi.com/2/files/get_metadata",
@@ -407,6 +428,38 @@ export async function getDropboxClient(
         }
 
         return Buffer.from(await response.arrayBuffer());
+      });
+    },
+
+    async downloadFileToPath(filePath: string, destPath: string) {
+      return withToken(async (accessToken) => {
+        const response = await fetchImpl(
+          "https://content.dropboxapi.com/2/files/download",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Dropbox-API-Arg": JSON.stringify({ path: filePath }),
+            },
+          },
+        );
+
+        if (!response.ok) {
+          throw await readDropboxError(response);
+        }
+        if (!response.body) {
+          throw new DropboxIntegrationError({
+            code: "API_ERROR",
+            message: "Dropbox download returned an empty body.",
+          });
+        }
+
+        const nodeStream = Readable.fromWeb(
+          response.body as import("node:stream/web").ReadableStream,
+        );
+        await pipeline(nodeStream, createWriteStream(destPath, { mode: 0o600 }));
+        const info = await stat(destPath);
+        return { size: info.size };
       });
     },
 
@@ -475,6 +528,40 @@ export async function getDropboxClient(
             pathDisplay: link.path_display,
           };
         }
+      });
+    },
+
+    async getTemporaryUploadLink(params: {
+      path: string;
+      durationSeconds: number;
+    }) {
+      return withToken(async (accessToken) => {
+        const json = await dropboxFetchJson<{ link?: string }>(
+          accessToken,
+          "https://api.dropboxapi.com/2/files/get_temporary_upload_link",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              commit: {
+                path: params.path,
+                mode: "add",
+                autorename: false,
+                mute: true,
+                strict_conflict: true,
+              },
+              duration: params.durationSeconds,
+            }),
+          },
+          fetchImpl,
+        );
+        if (!json.link) {
+          throw new DropboxIntegrationError({
+            code: "API_ERROR",
+            message: "Dropbox did not return a temporary upload link.",
+          });
+        }
+        return { link: json.link };
       });
     },
 

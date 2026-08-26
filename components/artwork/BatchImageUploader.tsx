@@ -4,7 +4,7 @@ import { useRef, useState, type DragEvent } from "react";
 import {
   MAX_ARTWORKS_PER_BATCH,
   MAX_BATCH_BYTES,
-  MAX_FILE_BYTES,
+  MAX_FILE_SIZE_LABEL,
 } from "@/lib/artwork/types";
 import { formatFileSize } from "@/lib/artwork/validation";
 
@@ -109,7 +109,7 @@ export function BatchImageUploader({
                 the {formatFileSize(MAX_BATCH_BYTES)} total source-size limit
               </li>
               <li>
-                TIFF, JPEG, or PNG · up to {formatFileSize(MAX_FILE_BYTES)} per
+                TIFF, JPEG, or PNG · up to {MAX_FILE_SIZE_LABEL} per
                 file
               </li>
               <li>Files stay on this device until you submit later</li>

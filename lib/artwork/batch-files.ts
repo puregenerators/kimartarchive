@@ -154,7 +154,7 @@ export function appendFilesToBatch(
     if (!evaluated.ok) {
       const isSize =
         file.size > MAX_FILE_BYTES &&
-        evaluated.error.toLowerCase().includes("250");
+        evaluated.error.toLowerCase().includes("limit");
       rejected.push({
         code: isSize ? "file_too_large" : "unsupported",
         file,

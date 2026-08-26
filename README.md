@@ -21,7 +21,7 @@ The app is not a database. Successful intake writes a Sheet row; `/artworks` rea
 
 The app is private. `APP_ACCESS_PASSWORD` must be set; production fails closed if it is missing. After login, a secure HTTP-only cookie remembers access. Pages, APIs, and server actions all verify that session independently.
 
-Large TIFF intake is **not** production-ready on Vercel. Masters still pass through a Function request body (4.5 MB hard limit). See `docs/SUBMISSION_PIPELINE.md`.
+Large TIFF intake uploads masters **directly to Dropbox** (150 MB maximum per file). See `docs/SUBMISSION_PIPELINE.md`.
 
 ## Docs
 

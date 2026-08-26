@@ -4,7 +4,11 @@ export type DimensionUnit = (typeof DIMENSION_UNITS)[number];
 /** Local preview IDs begin here and increment by artwork order. */
 export const PREVIEW_INVENTORY_BASE = 1000;
 
-export const MAX_FILE_BYTES = 250 * 1024 * 1024;
+/** Production maximum per master until Dropbox upload-session support exists. */
+export const MAX_FILE_BYTES = 150 * 1024 * 1024;
+
+/** Operator-facing label for {@link MAX_FILE_BYTES}. */
+export const MAX_FILE_SIZE_LABEL = "150 MB";
 
 /** Product hard cap for total source bytes in one batch. */
 export const MAX_BATCH_BYTES = 750 * 1024 * 1024;

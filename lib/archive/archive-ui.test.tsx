@@ -333,7 +333,7 @@ const tests: TestCase[] = [
       const expected = [
         { href: "/", label: "Home" },
         { href: "/artworks", label: "Artwork Archive" },
-        { href: "/new-artwork", label: "New Artwork Batch" },
+        { href: "/new-artwork", label: "Add New Artwork" },
         { href: "/setup/archive", label: "Settings" },
       ];
       for (const item of expected) {

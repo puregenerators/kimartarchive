@@ -472,6 +472,64 @@ export async function updateInventoryClaimStatus(params: {
 }
 
 /**
+ * Repair a claim's Inventory ID after append-then-verify detects a duplicate.
+ */
+export async function updateInventoryClaimInventoryId(params: {
+  claimId: string;
+  inventoryId: number;
+  spreadsheetId?: string;
+}): Promise<{ updated: true; rowNumber: number } | { updated: false; reason: string }> {
+  const spreadsheetId = params.spreadsheetId ?? getGoogleEnvSafe().sheetId;
+  const sheets = createSheetsClient();
+
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: quoteSheetRange(INVENTORY_CLAIMS_TAB, "A2:E"),
+      majorDimension: "ROWS",
+    });
+
+    const values = response.data.values ?? [];
+    const matches: number[] = [];
+    for (let index = 0; index < values.length; index += 1) {
+      const claimId = String(values[index]?.[0] ?? "");
+      if (claimId === params.claimId) {
+        matches.push(index);
+      }
+    }
+
+    if (matches.length === 0) {
+      return { updated: false, reason: "claim_not_found" };
+    }
+    if (matches.length > 1) {
+      return { updated: false, reason: "claim_id_ambiguous" };
+    }
+
+    const rowIndex = matches[0]!;
+    const rowNumber = rowIndex + 2;
+    const existing = values[rowIndex] ?? [];
+    const nextRow = [
+      String(existing[0] ?? params.claimId),
+      String(params.inventoryId),
+      String(existing[2] ?? ""),
+      String(existing[3] ?? ""),
+      String(existing[4] ?? ""),
+    ];
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: quoteSheetRange(INVENTORY_CLAIMS_TAB, `A${rowNumber}:E${rowNumber}`),
+      valueInputOption: "RAW",
+      requestBody: { values: [nextRow] },
+    });
+
+    return { updated: true, rowNumber };
+  } catch (error) {
+    throw mapGoogleApiError(error, "sheets");
+  }
+}
+
+/**
  * Read Artwork Inventory headers + data rows.
  * Maps later by header name; does not assume a fixed data row count.
  */

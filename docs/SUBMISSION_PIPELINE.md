@@ -14,18 +14,18 @@ Notion dashboard publishing is planned but **not implemented**.
 
 ## Endpoint
 
-`POST /api/artwork-batches/submit` (multipart/form-data)
+Production intake uses JSON routes. Master bytes never enter a Vercel Function body.
 
-Fields:
+| Route | Body | Purpose |
+| --- | --- | --- |
+| `POST /api/artwork-batches/prepare` | JSON metadata + declared file sizes | Preflight, claim inventory IDs, reserve Dropbox folders |
+| `POST /api/artwork-batches/upload-link` | JSON path / type / size | Mint a short-lived Dropbox temporary upload link (`mode=add`) |
+| Browser | octets to the Dropbox link | Upload the master directly to Dropbox (≤ 150 MB) |
+| `POST /api/artwork-batches/process` | JSON metadata + Dropbox path | Download master to `/tmp`, generate derivatives, upload, append Sheet |
 
-| Field | Description |
-| --- | --- |
-| `submissionAttemptId` | Client-generated UUID for this confirm+submit attempt |
-| `shared` | JSON shared batch details |
-| `artworks` | JSON array of artwork metadata (stable `clientArtworkId`, order, fields) |
-| `file:{clientArtworkId}` | One source file per artwork, keyed by stable client ID |
+`POST /api/artwork-batches/submit` remains as a legacy multipart path for small local scripts. It is disabled on Vercel (`403`) so master bytes cannot pass through a function request body. The intake UI does not send master bytes there.
 
-The server regenerates inventory IDs, filenames, folder names, Drive URLs, and derivatives. It does **not** trust preview inventory IDs or client-planned filenames.
+The server regenerates inventory IDs, filenames, folder names, Dropbox URLs, and derivatives. It does **not** trust preview inventory IDs or client-planned filenames.
 
 Artwork metadata in the submission payload and inventory row covers title, year, medium, dimensions, photographer, exhibition, gallery / venue, notes, and file/folder links. Medium is a single resolved string (Monotype, Painting, or a specific custom value such as Watercolor) — the intake UI may offer an Other choice, but the payload and Sheet row never store the literal word `Other` unless the user intentionally typed it as the custom value (which validation rejects). Series, Edition, Status, and Location are not collected or written during intake. Current physical location and ownership belong in a later Artwork Management workflow.
 
@@ -42,7 +42,7 @@ Before claiming any inventory IDs or creating Sheet / storage artwork resources,
 3. Spreadsheet is reachable; `Artwork Inventory` and `Inventory Claims` tabs exist
 4. Both header rows **exactly** match expected schemas
 5. Service account has Editor access on the Sheet
-6. Complete batch passes **server-side** validation (count ≤ 24, ≤ 250 MB/file, ≤ 750 MB total, one valid image per artwork)
+6. Complete batch passes **server-side** validation (count ≤ 24, ≤ 150 MB/file, ≤ 750 MB total, one valid image per artwork)
 
 **Dropbox storage (default)** — additionally:
 
@@ -97,25 +97,34 @@ It does **not** protect against:
 - two `next dev` / server instances
 - multiple replicas
 
-Google Sheets does **not** provide database-grade locking. Prefer reconciliation warnings over duplicate data if concurrency is suspected.
+Google Sheets does **not** provide database-grade locking. Production allocation therefore:
+
+1. Takes the in-process mutex
+2. Creates `/_system/inventory-allocation.lock` with Dropbox `mode=add` (atomic; stale locks older than 30s may be stolen)
+3. Reads claims, appends the new rows, then **re-reads**
+4. If an inventory ID appears twice, the later row is repaired to `max+1` and re-checked
+5. Releases the Dropbox lock
+
+Retry of a **Processing** or **Claimed** claim reuses that inventory ID. Failed and Completed IDs are never reused.
 
 ---
 
 ## Sequential artwork processing
 
-Order per artwork:
+Order per artwork (direct-to-Dropbox path):
 
 1. Mark claim `Processing`
-2. Create artwork folder (direct child of configured archive root)
-3. Upload master (original bytes preserved) **concurrently with** HR / web / thumbnail generation
-4. Generate HR, web, and thumbnail JPGs concurrently from one decoded master pixel buffer (HR/web settings unchanged; thumbnail is produced from the original source, not from the HR or web JPEG)
-5. Upload HR, web, and thumbnail JPGs concurrently
-6. Generate and upload portable `{inventoryId}_metadata.json`
-7. Append one complete `Artwork Inventory` row (Thumbnail cell is an `IMAGE()` formula)
-8. Mark claim `Completed`
-9. Delete temporary local files
+2. Reserve artwork folder (reuse on retry if it already belongs to this claim)
+3. Browser uploads the master to a path-bound Dropbox temporary upload link (`mode=add`)
+4. Server downloads the master from Dropbox to a unique file-backed temp directory
+5. Generate HR, then web, then thumbnail sequentially from one decoded master pixel buffer (settings unchanged; thumbnail is produced from the original source, not from the HR or web JPEG)
+6. Upload HR, web, and thumbnail JPGs
+7. Generate and upload portable `{inventoryId}_metadata.json`
+8. Append one complete `Artwork Inventory` row only if that inventory ID does not already have a row
+9. Mark claim `Completed`
+10. Delete temporary local files (success and failure)
 
-Master upload may overlap derivative generation because generation reads the in-memory source bytes. Folder creation, inventory claim, metadata upload, final folder move, and Sheets append stay sequential — they have real ordering dependencies.
+If derivative generation fails after the master exists in Dropbox, the claim stays **Processing** so the same inventory ID can be retried. The master is not overwritten (`mode=add`). Derivative JPEGs may be overwritten on retry.
 
 Do **not** append the inventory row until all four image files and the metadata file exist.
 
@@ -241,19 +250,17 @@ Never log: private keys, tokens, credentials, image bytes, derivative buffers, r
 
 ## Production hosting limits (Vercel)
 
-Intake uploads the **entire master file** in `POST /api/artwork-batches/submit`. That request is a Vercel Function.
+The intake UI uploads masters **directly to Dropbox**. Vercel Functions receive JSON only.
 
-| Constraint | Current limit | Consequence |
+| Constraint | Current production | Consequence |
 | --- | --- | --- |
-| Request body | **4.5 MB** (platform hard limit) | JPEG/PNG under this size can complete intake. Representative TIFFs generally cannot. |
-| Duration | `maxDuration = 300` (5 minutes) | Sequential Sharp + Dropbox of a large batch can still time out. |
-| Memory | 2 GB Hobby / up to 4 GB Pro | High-megapixel TIFF decode can still fail. |
+| Request body | **4.5 MB** (JSON only on the new path) | Masters never pass through a Function body |
+| Duration | `maxDuration = 300` on the process route (Hobby maximum) | One large TIFF should finish; a 24-artwork batch is sequential and can still time out |
+| Memory | Hobby default **2 GB** (not configurable) | Measured Sharp RSS ~643 MB for a 56 MB / 20 MP TIFF is within this budget if derivatives encode sequentially from a file-backed download |
 
-A successful deploy does **not** mean TIFF intake is production-ready. Do not send irreplaceable masters through this path. Direct-to-Dropbox (or similar) upload is still required before production-scale TIFF intake.
+A successful deploy still does not prove every archive TIFF will process. 16-bit or ~200 MP files can exceed 2 GB. Files over **150 MB** are rejected until Dropbox upload-session support exists.
 
-API upload routes are excluded from Next.js Proxy so Proxy’s 10 MB body buffer does not truncate masters. Those routes still verify the access cookie themselves.
-
-Production hosting for large uploads (especially 250 MB TIFFs on Vercel) remains **unresolved**.
+API JSON routes still verify the access cookie themselves. Temporary upload links are path-bound and short-lived; Dropbox access and refresh tokens stay server-only.
 
 ---
 

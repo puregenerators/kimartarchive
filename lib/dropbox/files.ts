@@ -12,7 +12,7 @@ import type {
   DropboxSharedLink,
 } from "@/lib/dropbox/types";
 
-export type { DropboxFilesOps } from "@/lib/dropbox/files-ops";
+export type { DropboxFilesOps, DropboxUploadMode } from "@/lib/dropbox/files-ops";
 
 function isNotFoundError(error: unknown): boolean {
   const parts: string[] = [];
@@ -46,14 +46,19 @@ export function createDropboxFilesOps(client: DropboxClient): DropboxFilesOps {
         client.deleteFolder(path),
       ),
 
-    uploadBuffer: (path, contents) =>
+    uploadBuffer: (path, contents, options) =>
       timedDropboxOperation("uploadBuffer", path, () =>
-        client.uploadBuffer(path, contents),
+        client.uploadBuffer(path, contents, options),
       ),
 
     downloadFile: (path) =>
       timedDropboxOperation("downloadFile", path, () =>
         client.downloadFile(path),
+      ),
+
+    downloadFileToPath: (path, destPath) =>
+      timedDropboxOperation("downloadFileToPath", path, () =>
+        client.downloadFileToPath(path, destPath),
       ),
 
     getMetadata: (path) =>
@@ -64,6 +69,11 @@ export function createDropboxFilesOps(client: DropboxClient): DropboxFilesOps {
     createSharedLink: (path) =>
       timedDropboxOperation("createSharedLink", path, () =>
         client.createSharedLink(path),
+      ),
+
+    getTemporaryUploadLink: (params) =>
+      timedDropboxOperation("getTemporaryUploadLink", params.path, () =>
+        client.getTemporaryUploadLink(params),
       ),
 
     deleteFile: (path) =>

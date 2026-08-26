@@ -330,20 +330,20 @@ Kim Artwork Archive/          ← archive root folder ID
 
 **Local milestone:** `/api/dev/process-artwork-image` processes one artwork at a time for UI preview/download of temporary derivatives. It does not claim inventory IDs or write to Drive/Sheets.
 
-**TIFF UI previews:** `POST /api/image-preview` generates temporary JPEG thumbnails for selected TIFF masters so artwork cards and Batch Review can show an image. These thumbnails are temporary UI previews only — not archival outputs — and are discarded on replace/remove/batch reset or TTL expiry. Preview failure does not block validation or submission.
+**TIFF UI previews:** `POST /api/image-preview` generates temporary JPEG thumbnails for selected TIFF masters so artwork cards and Batch Review can show an image. These thumbnails are temporary UI previews only — not archival outputs — and are discarded on replace/remove/batch reset or TTL expiry. TIFFs that exceed the **4.5 MB** preview-endpoint body limit skip that POST, show a filename/type placeholder, and still allow intake. Preview failure does not block validation or submission.
 
 ### 8.2 Product upload limits (MVP)
 
 | Limit | Value |
 | --- | --- |
 | Images per artwork | Exactly **1** |
-| Max size per individual file | **250 MB** |
+| Max size per individual file | **150 MB** |
 | Max total source size per batch | **750 MB** |
 | Max artworks per batch | **24** (typical working batch ~10–12) |
 
 Batch upload creates one artwork draft per selected file. Users may add more images later; duplicates (same File object or matching name/size/lastModified) warn before adding.
 
-Previous “5 masters / 750 MB per single-artwork intake” limits are superseded by the one-image-per-artwork batch model. Per-file **250 MB** and batch **750 MB** remain.
+Previous “5 masters / 750 MB per single-artwork intake” limits are superseded by the one-image-per-artwork batch model. Per-file **150 MB** (Dropbox temporary-upload-link cap) and batch **750 MB** remain. Do not advertise 250 MB until upload-session support exists.
 
 These are **product** limits, not proof that Vercel can accept or process them in a single request.
 
@@ -399,27 +399,24 @@ Details: `docs/SUBMISSION_PIPELINE.md`.
 
 ---
 
-## 12. Unresolved production concern — large TIFF / Vercel limits
+## 12. Production upload — direct to Dropbox (150 MB)
 
-**Status: unresolved. Do not treat TIFF intake as production-ready because a deploy succeeded.**
+Intake no longer POSTs master bytes through `POST /api/artwork-batches/submit`. The UI:
 
-Intake still POSTs the full master file through `POST /api/artwork-batches/submit`. On Vercel that is a Function request body.
+1. Calls authenticated JSON routes to claim an ID and mint a Dropbox **temporary upload link** (`mode=add`, 15-minute TTL, path-bound)
+2. Uploads the master from the browser to that link (never through Vercel)
+3. Calls `POST /api/artwork-batches/process` with JSON metadata and the Dropbox path only
 
 Current Vercel constraints (see [Functions limitations](https://vercel.com/docs/functions/limitations)):
 
 | Constraint | Limit | Effect on this app |
 | --- | --- | --- |
-| Function request/response body | **4.5 MB** (hard; not configurable) | Masters larger than ~4.5 MB return `413 FUNCTION_PAYLOAD_TOO_LARGE` before Sharp or Dropbox run |
-| Function duration | Hobby 300s max; Pro default 300s, max 800s | This app sets `maxDuration = 300` on submit |
-| Function memory | Hobby 2 GB; Pro up to 4 GB | Large TIFF decode in Sharp can still OOM |
-| Next.js Proxy body buffer | 10 MB default if Proxy reads/clones the body | Upload APIs are **excluded** from `proxy.ts` so masters are not truncated there |
+| Function request/response body | **4.5 MB** (hard) | JSON prepare/process only. Masters bypass this cap |
+| Function duration | Hobby **300s** max; this app sets `maxDuration = 300` on process | Active for the processing function |
+| Function memory | Hobby **2 GB** (not configurable) | Measured ~643 MB RSS for a 20 MP TIFF fits; sequential encode is required |
+| Dropbox temporary upload link | **150 MiB** single-request cap | Current production maximum per master |
 
-Product limits (250 MB / file, 750 MB / batch) are **not** achievable through this request path. Production-scale TIFF intake needs a direct-to-storage upload (presigned URL or similar) that never passes the master through a Vercel Function.
-
-- Do **not** assume a normal Vercel Route Handler can receive full master binaries.
-- Do **not** choose Vercel Blob or another temporary storage service yet.
-- Local implementation may process files available on disk / local upload for development.
-- Decide production upload architecture **after** testing representative master files (especially large TIFFs) against the target runtime.
+Do **not** advertise 250 MB until Dropbox upload-session support exists. Do **not** expose Dropbox access or refresh tokens to the browser.
 
 ---
 

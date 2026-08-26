@@ -5,11 +5,19 @@
 
 import sharp from "sharp";
 
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { ArtworkImageThumb } from "@/components/artwork/ArtworkImageThumb";
 import {
   clearAllTiffPreviewState,
   clearTiffPreviewState,
   buildSourceFileFingerprint,
   resolveTiffPreviewUrl,
+  shouldSkipTiffUiPreviewUpload,
+  TIFF_UI_PREVIEW_MAX_UPLOAD_BYTES,
+  VERCEL_FUNCTION_BODY_LIMIT_BYTES,
+  tiffUiPreviewSkippedMessage,
   type TiffPreviewState,
 } from "./preview-client";
 import { IMAGE_PROCESSING_CONFIG } from "./config";
@@ -26,6 +34,7 @@ import {
   createArtworkDraft,
   type ArtworkDraft,
 } from "@/lib/artwork/types";
+import { validateArtworkDraft } from "@/lib/artwork/validation";
 import { batchDraftToSubmissionPayload } from "@/lib/submission/validate-input";
 import { buildArtworkInventoryRow } from "@/lib/submission/inventory-row";
 import { resolveArtworkMetadata } from "@/lib/submission/claim-logic";
@@ -173,6 +182,89 @@ const tests: TestCase[] = [
         resolveTiffPreviewUrl(errorState, fingerprint),
         null,
         "no url on error",
+      );
+    },
+  },
+  {
+    name: "TIFFs over the Vercel preview body limit skip the preview upload",
+    run: () => {
+      assertEqual(
+        shouldSkipTiffUiPreviewUpload(TIFF_UI_PREVIEW_MAX_UPLOAD_BYTES),
+        false,
+        "4 MB still attempted",
+      );
+      assertEqual(
+        shouldSkipTiffUiPreviewUpload(TIFF_UI_PREVIEW_MAX_UPLOAD_BYTES + 1),
+        true,
+        "over 4 MB skipped",
+      );
+      assertEqual(
+        shouldSkipTiffUiPreviewUpload(VERCEL_FUNCTION_BODY_LIMIT_BYTES + 1),
+        true,
+        "over 4.5 MB skipped",
+      );
+      const message = tiffUiPreviewSkippedMessage("HarmonyInRed.tif");
+      assert(message.includes("HarmonyInRed.tif"), "filename in skip message");
+      assert(message.includes("TIFF"), "type in skip message");
+      assert(
+        message.toLowerCase().includes("intake can continue"),
+        "intake continues",
+      );
+    },
+  },
+  {
+    name: "large TIFF preview skip shows filename/type placeholder and does not block intake",
+    run: () => {
+      const file = makeFileFromBuffer(
+        "HarmonyInRed.tif",
+        Buffer.from([0, 1, 2, 3]),
+      );
+      const image = {
+        file,
+        previewUrl: null,
+        isTiff: true,
+      };
+      const fingerprint = buildSourceFileFingerprint({
+        imageName: file.name,
+        imageSize: file.size,
+        imageLastModified: file.lastModified,
+      });
+      const markup = renderToStaticMarkup(
+        createElement(ArtworkImageThumb, {
+          image,
+          tiffPreview: {
+            status: "error",
+            fingerprint,
+            message: tiffUiPreviewSkippedMessage(file.name),
+          },
+        }),
+      );
+      assert(markup.includes("HarmonyInRed.tif"), "filename placeholder");
+      assert(markup.includes("TIFF"), "type placeholder");
+      assert(markup.includes("Intake can continue"), "continue copy");
+
+      const draft = createArtworkDraft(
+        {
+          exhibition: "",
+          gallery: "",
+          exhibitionYear: "",
+          defaultArtworkYear: "2021",
+          photographer: "",
+          defaultMedium: "Monotype",
+          defaultDimensionUnit: "in",
+        },
+        {
+          title: "Harmony in Red",
+          year: "2021",
+          medium: "Monotype",
+          image,
+        },
+      );
+      const errors = validateArtworkDraft(draft);
+      assertEqual(
+        errors.image,
+        undefined,
+        "preview skip does not fail validation",
       );
     },
   },

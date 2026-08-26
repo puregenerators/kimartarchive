@@ -1,5 +1,12 @@
 import type { ReactNode } from "react";
 
+export type IntakeProgressItem = {
+  title: string;
+  stage: string;
+  percent: number | null;
+  error: string | null;
+};
+
 export function submittingWaitLabel(artworkCount: number): string {
   return `Submitting ${artworkCount} artwork${artworkCount === 1 ? "" : "s"}. Please wait.`;
 }
@@ -24,10 +31,12 @@ export function SubmittingStatusDots({
 export function BatchSubmittingStatusView({
   artworkCount,
   elapsedSec,
+  items,
   children,
 }: {
   artworkCount: number;
   elapsedSec: number;
+  items?: IntakeProgressItem[];
   children?: ReactNode;
 }) {
   return (
@@ -41,13 +50,47 @@ export function BatchSubmittingStatusView({
         {artworkCount === 1 ? "" : "s"}
       </p>
       <p className="mt-2 text-[var(--muted)]">
-        This may take several minutes. Large TIFFs take time. Do not close this page.
+        Masters upload directly to Dropbox (up to 150 MB each). This may take
+        several minutes. Do not close this page.
       </p>
       <SubmittingStatusDots artworkCount={artworkCount} />
       <p className="mt-3 text-xs text-[var(--muted)]">
-        Elapsed {elapsedSec}s · exact per-artwork stage is not streamed live
+        Elapsed {elapsedSec}s
+        {items && items.length > 0
+          ? " · upload progress below"
+          : " · exact per-artwork stage is not streamed live"}
       </p>
+      {items && items.length > 0 ? (
+        <ul className="mt-4 space-y-3">
+          {items.map((item) => (
+            <li key={item.title}>
+              <p className="font-medium">{item.title}</p>
+              <p className="text-xs text-[var(--muted)]">{item.stage}</p>
+              {item.percent != null ? (
+                <div className="mt-1">
+                  <div
+                    className="h-2 overflow-hidden bg-[var(--surface)]"
+                    aria-hidden="true"
+                  >
+                    <div
+                      className="h-2 bg-[var(--accent)]"
+                      style={{ width: `${Math.round(item.percent * 100)}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-[var(--muted)]">
+                    {Math.round(item.percent * 100)}% uploaded
+                  </p>
+                </div>
+              ) : null}
+              {item.error ? (
+                <p className="mt-1 text-xs text-[var(--danger)]">{item.error}</p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {children}
     </div>
   );
 }
+

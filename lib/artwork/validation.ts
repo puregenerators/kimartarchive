@@ -5,6 +5,7 @@ import {
   MAX_ARTWORKS_PER_BATCH,
   MAX_BATCH_BYTES,
   MAX_FILE_BYTES,
+  MAX_FILE_SIZE_LABEL,
   formatArtworkNumber,
   type ArtworkDraft,
   type ArtworkValidationErrors,
@@ -93,7 +94,7 @@ export function evaluateSingleImage(file: File | undefined): SingleImageResult {
   if (file.size > MAX_FILE_BYTES) {
     return {
       ok: false,
-      error: `${file.name} exceeds the 250 MB per-file limit (${formatFileSize(file.size)}).`,
+      error: `${file.name} exceeds the ${MAX_FILE_SIZE_LABEL} per-file limit (${formatFileSize(file.size)}).`,
     };
   }
 
@@ -139,7 +140,7 @@ export function validateArtworkDraft(
   } else if (!isSupportedImageFile(artwork.image.file)) {
     errors.image = `Unsupported file: ${artwork.image.file.name}.`;
   } else if (artwork.image.file.size > MAX_FILE_BYTES) {
-    errors.image = `${artwork.image.file.name} exceeds the 250 MB limit.`;
+    errors.image = `${artwork.image.file.name} exceeds the ${MAX_FILE_SIZE_LABEL} limit.`;
   }
 
   return errors;

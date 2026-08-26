@@ -1,16 +1,17 @@
 /**
- * Permanent artwork batch submission endpoint.
+ * Legacy local-only multipart artwork batch submission.
  *
- * Accepts one complete batch as multipart/form-data, claims inventory IDs,
- * processes artworks sequentially, and returns one structured report.
- *
- * Temporary files live under os.tmpdir(). Production Vercel request bodies
- * are capped at 4.5 MB — large TIFF masters cannot pass through this route.
+ * Disabled on Vercel so master bytes cannot pass through a function request
+ * body. Local scripts (`next dev` / `next start`) may still use this path.
  */
 
 import { NextResponse } from "next/server";
 
 import { unauthorizedApiResponse } from "@/lib/auth/access";
+import {
+  MULTIPART_SUBMIT_BLOCKED_MESSAGE,
+  multipartMasterSubmitAllowed,
+} from "@/lib/submission/multipart-submit-guard";
 import type {
   ArtworkBatchSubmissionInput,
   ArtworkSubmissionInput,
@@ -19,7 +20,7 @@ import type {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Large TIFF masters: product limit 250 MB/file; sequential processing. */
+/** Legacy multipart path. Production UI uploads masters directly to Dropbox (150 MB). */
 export const maxDuration = 300;
 
 function json(data: unknown, status = 200) {
@@ -95,6 +96,21 @@ function parseSharedJson(
 export async function POST(request: Request) {
   const denied = await unauthorizedApiResponse();
   if (denied) return denied;
+
+  if (!multipartMasterSubmitAllowed()) {
+    return json(
+      {
+        ok: false,
+        kind: "invalid_request",
+        submissionAttemptId: null,
+        archiveTarget: null,
+        code: "MULTIPART_DISABLED",
+        message: MULTIPART_SUBMIT_BLOCKED_MESSAGE,
+        completedAt: new Date().toISOString(),
+      },
+      403,
+    );
+  }
 
   try {
     const contentType = request.headers.get("content-type") || "";
