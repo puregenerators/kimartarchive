@@ -1622,6 +1622,12 @@ const tests: TestCase[] = [
         3,
         "every submitted artwork appears once",
       );
+      assert(markup.includes("1 Successful artwork"), "success heading count");
+      assert(markup.includes("1 Failed artwork"), "failed heading count");
+      assert(
+        markup.includes("1 Artwork requiring reconciliation"),
+        "reconciliation heading count",
+      );
       assert(markup.includes("Tulip Tree"), "success title");
       assert(markup.includes("Red Field"), "failed title");
       assert(markup.includes("Cedar Waxwing"), "recon title");
@@ -1662,7 +1668,132 @@ const tests: TestCase[] = [
       assert(!markup.includes("Submission finished with issues"), "no issues heading");
       assert(!markup.includes('id="failed-heading"'), "no failed section");
       assert(!markup.includes('id="reconciliation-heading"'), "no recon section");
+      assert(markup.includes("1 Successful artwork"), "singular success count");
+      assert(!markup.includes("Successful artworks"), "not plural for one");
+      assert(markup.includes("<details"), "batch summary is a disclosure");
+      assert(
+        !/<details[^>]*\sopen/.test(markup),
+        "batch summary collapsed by default",
+      );
+      assert(markup.includes("▸"), "disclosure chevron");
+      assert(markup.includes("Total artworks"), "summary details remain in markup");
+      assert(markup.includes("Submission-attempt ID"), "attempt id remains");
+      assert(markup.includes("Completed at"), "completed-at remains");
       assertEqual(countSectionCards(markup, "success-heading"), 1, "one success card");
+    },
+  },
+  {
+    name: "completion page section headings use plural counts from result cards",
+    run: () => {
+      const markup = renderToStaticMarkup(
+        <BatchSubmissionReport
+          result={buildCompletedBatchResult({
+            submissionAttemptId: "attempt-plural",
+            archiveTarget: "production",
+            completedAt: "2026-08-25T00:00:00.000Z",
+            artworks: [
+              sampleSuccess({
+                clientArtworkId: "art-1",
+                title: "Tulip Tree",
+                order: 0,
+                inventoryId: 1100,
+              }),
+              sampleSuccess({
+                clientArtworkId: "art-2",
+                title: "Red Field",
+                order: 1,
+                inventoryId: 1101,
+              }),
+              createArtworkSubmissionFailure({
+                clientArtworkId: "art-3",
+                order: 2,
+                title: "Lost File",
+                inventoryId: null,
+                lastCompletedStage: "pending",
+                failedOperation: null,
+                errorCode: "MISSING_FILE",
+                message: "Source file is missing from this browser session.",
+              }),
+              createArtworkSubmissionFailure({
+                clientArtworkId: "art-4",
+                order: 3,
+                title: "Broken Scan",
+                inventoryId: 1103,
+                lastCompletedStage: "master_uploaded",
+                failedOperation: "upload_hr",
+                message: "High-resolution upload was rejected.",
+              }),
+              {
+                ...sampleSuccess({
+                  clientArtworkId: "art-5",
+                  title: "Cedar Waxwing",
+                  order: 4,
+                  inventoryId: 1104,
+                }),
+                stage: "reconciliation_required" as const,
+                claimStatus: "Processing" as const,
+                reconciliationWarnings: [
+                  {
+                    code: "INVENTORY_ROW_WITHOUT_COMPLETED_CLAIM" as const,
+                    message:
+                      "Dropbox files and the Artwork Inventory row exist, but the claim status could not be marked Completed.",
+                  },
+                ],
+              },
+              {
+                ...sampleSuccess({
+                  clientArtworkId: "art-6",
+                  title: "River Stones",
+                  order: 5,
+                  inventoryId: 1105,
+                }),
+                stage: "reconciliation_required" as const,
+                claimStatus: "Processing" as const,
+                reconciliationWarnings: [
+                  {
+                    code: "INVENTORY_ROW_WITHOUT_COMPLETED_CLAIM" as const,
+                    message:
+                      "Dropbox files and the Artwork Inventory row exist, but the claim status could not be marked Completed.",
+                  },
+                ],
+              },
+              {
+                ...sampleSuccess({
+                  clientArtworkId: "art-7",
+                  title: "Evening Light",
+                  order: 6,
+                  inventoryId: 1106,
+                }),
+                stage: "reconciliation_required" as const,
+                claimStatus: "Processing" as const,
+                reconciliationWarnings: [
+                  {
+                    code: "INVENTORY_ROW_WITHOUT_COMPLETED_CLAIM" as const,
+                    message:
+                      "Dropbox files and the Artwork Inventory row exist, but the claim status could not be marked Completed.",
+                  },
+                ],
+              },
+            ],
+            sheetUrl: null,
+            driveRootUrl: null,
+          })}
+          onStartNewBatch={() => undefined}
+        />,
+      );
+      assert(markup.includes("2 Successful artworks"), "plural success heading");
+      assert(markup.includes("2 Failed artworks"), "plural failed heading");
+      assert(
+        markup.includes("3 Artworks requiring reconciliation"),
+        "plural reconciliation heading",
+      );
+      assertEqual(countSectionCards(markup, "success-heading"), 2, "two success cards");
+      assertEqual(countSectionCards(markup, "failed-heading"), 2, "two failed cards");
+      assertEqual(
+        countSectionCards(markup, "reconciliation-heading"),
+        3,
+        "three reconciliation cards",
+      );
     },
   },
   {
@@ -1698,9 +1829,9 @@ const tests: TestCase[] = [
           onStartNewBatch={() => undefined}
         />,
       );
-      assert(markup.includes("Successful artworks"), "success section remains");
+      assert(markup.includes("1 Successful artwork"), "success section remains");
       assert(markup.includes("Tulip Tree"), "successful artwork still listed");
-      assert(markup.includes("Failed artworks"), "failed section");
+      assert(markup.includes("1 Failed artwork"), "failed section");
       assert(markup.includes("Lost File"), "failed title");
       assert(!markup.includes("Inventory null"), "no null inventory");
       assertEqual(countSectionCards(markup, "success-heading"), 1, "success card");

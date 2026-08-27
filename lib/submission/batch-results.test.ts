@@ -8,11 +8,14 @@ import {
   buildCompletedBatchResult,
   createArtworkSubmissionFailure,
   failedArtworkProgressLines,
+  failedArtworksHeading,
   failedDuringLabel,
   normalizeArtworkSubmissionResult,
   partitionBatchArtworkResults,
+  reconciliationArtworksHeading,
   submissionReportHeading,
   submissionReportLead,
+  successfulArtworksHeading,
   summarizeBatchArtworkResults,
   userFacingSubmissionMessage,
 } from "@/lib/submission/batch-results";
@@ -527,6 +530,33 @@ const tests: TestCase[] = [
       assert(
         submissionReportLead(allOk).includes("saved to Dropbox"),
         "success lead",
+      );
+    },
+  },
+  {
+    name: "result section headings include the count with singular or plural grammar",
+    run: () => {
+      assertEqual(
+        successfulArtworksHeading(1),
+        "1 Successful artwork",
+        "one success",
+      );
+      assertEqual(
+        successfulArtworksHeading(11),
+        "11 Successful artworks",
+        "many successes",
+      );
+      assertEqual(failedArtworksHeading(1), "1 Failed artwork", "one failure");
+      assertEqual(failedArtworksHeading(2), "2 Failed artworks", "many failures");
+      assertEqual(
+        reconciliationArtworksHeading(1),
+        "1 Artwork requiring reconciliation",
+        "one reconciliation",
+      );
+      assertEqual(
+        reconciliationArtworksHeading(3),
+        "3 Artworks requiring reconciliation",
+        "many reconciliations",
       );
     },
   },

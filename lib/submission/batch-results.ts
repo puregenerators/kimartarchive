@@ -424,6 +424,20 @@ export function submissionReportHeading(
   return "Submission finished with issues";
 }
 
+export function successfulArtworksHeading(count: number): string {
+  return count === 1 ? "1 Successful artwork" : `${count} Successful artworks`;
+}
+
+export function failedArtworksHeading(count: number): string {
+  return count === 1 ? "1 Failed artwork" : `${count} Failed artworks`;
+}
+
+export function reconciliationArtworksHeading(count: number): string {
+  return count === 1
+    ? "1 Artwork requiring reconciliation"
+    : `${count} Artworks requiring reconciliation`;
+}
+
 export function submissionReportLead(summary: BatchArtworkResultSummary): string {
   if (summary.total === 0) {
     return "No artworks were recorded for this submission.";

@@ -6,10 +6,13 @@ import { BatchStepHeading } from "@/components/artwork/BatchStepHeading";
 import { formatFileSize } from "@/lib/artwork/validation";
 import {
   failedArtworkProgressLines,
+  failedArtworksHeading,
   failedDuringLabel,
   partitionBatchArtworkResults,
+  reconciliationArtworksHeading,
   submissionReportHeading,
   submissionReportLead,
+  successfulArtworksHeading,
   summarizeBatchArtworkResults,
 } from "@/lib/submission/batch-results";
 import type {
@@ -256,17 +259,25 @@ export function BatchSubmissionReport({
         </div>
       ) : null}
 
-      <section
-        className="mt-8 border border-[var(--line)] bg-[var(--surface)] px-4 py-4"
+      <details
+        className="group mt-8 border border-[var(--line)] bg-[var(--surface)]"
         aria-labelledby="batch-summary-heading"
       >
-        <h2
-          id="batch-summary-heading"
-          className="font-display text-xl text-[var(--ink)]"
-        >
-          Batch summary
-        </h2>
-        <dl className="mt-3 grid gap-2 sm:grid-cols-2">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 select-none [&::-webkit-details-marker]:hidden hover:bg-[var(--accent-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">
+          <h2
+            id="batch-summary-heading"
+            className="font-display text-xl text-[var(--ink)]"
+          >
+            Batch summary
+          </h2>
+          <span
+            aria-hidden="true"
+            className="inline-block text-sm text-[var(--muted)] transition-transform group-open:rotate-90"
+          >
+            ▸
+          </span>
+        </summary>
+        <dl className="grid gap-2 border-t border-[var(--line)] px-4 py-4 sm:grid-cols-2">
           <div>
             <dt className="text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
               Total artworks
@@ -310,7 +321,7 @@ export function BatchSubmissionReport({
             </dd>
           </div>
         </dl>
-      </section>
+      </details>
 
       {successes.length > 0 ? (
         <section className="mt-10 space-y-4" aria-labelledby="success-heading">
@@ -318,7 +329,7 @@ export function BatchSubmissionReport({
             id="success-heading"
             className="font-display text-xl text-[var(--ink)]"
           >
-            Successful artworks
+            {successfulArtworksHeading(successes.length)}
           </h2>
           {successes.map((artwork) => (
             <SuccessArtworkCard
@@ -335,7 +346,7 @@ export function BatchSubmissionReport({
             id="failed-heading"
             className="font-display text-xl text-[var(--ink)]"
           >
-            Failed artworks
+            {failedArtworksHeading(failures.length)}
           </h2>
           {failures.map((artwork) => (
             <FailedArtworkCard
@@ -355,7 +366,7 @@ export function BatchSubmissionReport({
             id="reconciliation-heading"
             className="font-display text-xl text-[var(--ink)]"
           >
-            Reconciliation required
+            {reconciliationArtworksHeading(reconciliations.length)}
           </h2>
           {reconciliations.map((artwork) => (
             <ReconciliationArtworkCard
