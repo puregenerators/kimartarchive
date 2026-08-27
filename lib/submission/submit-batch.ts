@@ -26,6 +26,11 @@ import {
   fileToBufferAndTemp,
   removeTempDir,
 } from "@/lib/submission/temp-files";
+import {
+  buildCompletedBatchResult,
+  createArtworkSubmissionFailure,
+  normalizeArtworkSubmissionResult,
+} from "@/lib/submission/batch-results";
 import type {
   ArtworkBatchSubmissionInput,
   ArtworkSubmissionResult,
@@ -139,95 +144,95 @@ export async function submitArtworkBatch(
         (c) => c.clientArtworkId === artwork.clientArtworkId,
       );
       if (!claim) {
-        results.push({
-          ok: false,
-          clientArtworkId: artwork.clientArtworkId,
-          order: artwork.order,
-          title: artwork.title,
-          inventoryId: null,
-          claimId: null,
-          stage: "failed",
-          lastCompletedStage: "pending",
-          failedOperation: null,
-          driveFolder: null,
-          master: null,
-          hr: null,
-          web: null,
-          thumb: null,
-          metadata: null,
-          sheetRowWritten: false,
-          claimStatus: null,
-          cleanup: {
-            tempFilesRemoved: true,
-            folderMovedToFailedIntake: null,
-            cleanupWarnings: [],
-          },
-          startedAt: new Date().toISOString(),
-          finishedAt: new Date().toISOString(),
-          reconciliationWarnings: [],
-          errorCode: "UNKNOWN",
-          message: "Internal error: claim missing for artwork.",
-        });
+        results.push(
+          createArtworkSubmissionFailure({
+            clientArtworkId: artwork.clientArtworkId,
+            order: artwork.order,
+            title: artwork.title,
+            inventoryId: null,
+            claimId: null,
+            lastCompletedStage: "pending",
+            failedOperation: null,
+            errorCode: "UNKNOWN",
+            message: "Internal error: claim missing for artwork.",
+          }),
+        );
         continue;
       }
 
-      const file = filesByArtworkId.get(artwork.clientArtworkId)!;
-      const tempDir = artworkTempDir(batchTempDir, artwork.clientArtworkId);
-      await mkdir(tempDir, { recursive: true, mode: 0o700 });
+      try {
+        const file = filesByArtworkId.get(artwork.clientArtworkId)!;
+        const tempDir = artworkTempDir(batchTempDir, artwork.clientArtworkId);
+        await mkdir(tempDir, { recursive: true, mode: 0o700 });
 
-      const { buffer } = await fileToBufferAndTemp(
-        tempDir,
-        `source-${artwork.originalFilename || file.name}`,
-        file,
-      );
+        const { buffer } = await fileToBufferAndTemp(
+          tempDir,
+          `source-${artwork.originalFilename || file.name}`,
+          file,
+        );
 
-      const result = await processOneArtwork({
-        submissionAttemptId: input.submissionAttemptId,
-        artwork,
-        claim,
-        shared: input.shared,
-        sourceFile: file,
-        sourceBytes: buffer,
-        artworkTempDir: tempDir,
-        spreadsheetId: archive.sheetId,
-        storage,
-      });
+        const result = await processOneArtwork({
+          submissionAttemptId: input.submissionAttemptId,
+          artwork,
+          claim,
+          shared: input.shared,
+          sourceFile: file,
+          sourceBytes: buffer,
+          artworkTempDir: tempDir,
+          spreadsheetId: archive.sheetId,
+          storage,
+        });
 
-      results.push(result);
+        results.push(
+          normalizeArtworkSubmissionResult(result, {
+            clientArtworkId: artwork.clientArtworkId,
+            order: artwork.order,
+            title: artwork.title,
+            inventoryId: claim.inventoryId,
+            claimId: claim.claimId,
+            lastCompletedStage: "claimed",
+          }),
+        );
+      } catch (error) {
+        results.push(
+          createArtworkSubmissionFailure({
+            clientArtworkId: artwork.clientArtworkId,
+            order: artwork.order,
+            title: artwork.title,
+            inventoryId: claim.inventoryId,
+            claimId: claim.claimId,
+            lastCompletedStage: "claimed",
+            failedOperation: null,
+            errorCode: "UNKNOWN",
+            message:
+              error instanceof Error
+                ? error.message
+                : "This artwork could not be completed.",
+          }),
+        );
+      }
       // Process sequentially — do not start the next artwork until this one finishes.
     }
   } finally {
     await removeTempDir(batchTempDir);
   }
 
-  const completed = results.filter(
-    (r) => r.ok && r.stage === "completed",
-  ).length;
-  const reconciliationRequired = results.filter(
-    (r) => r.ok && r.stage === "reconciliation_required",
-  ).length;
-  const failed = results.filter((r) => !r.ok).length;
+  const completedResult = buildCompletedBatchResult({
+    submissionAttemptId: input.submissionAttemptId,
+    archiveTarget: archive.target,
+    completedAt: completedAt(),
+    artworks: results,
+    sheetUrl: spreadsheetBrowserUrl(archive.sheetId),
+    driveRootUrl: archiveRootUrl ?? storage.getArchiveRootUrl(),
+  });
 
   logSubmissionEvent({
     event: "batch_finished",
     submissionAttemptId: input.submissionAttemptId,
     archiveTarget: archive.target,
     outcome: "finished",
-    detail: `completed=${completed} failed=${failed} reconciliation=${reconciliationRequired}`,
+    detail: `completed=${completedResult.completed} failed=${completedResult.failed} reconciliation=${completedResult.reconciliationRequired}`,
   });
 
-  return {
-    ok: true,
-    kind: "completed",
-    submissionAttemptId: input.submissionAttemptId,
-    archiveTarget: archive.target,
-    completedAt: completedAt(),
-    total: results.length,
-    completed,
-    failed,
-    reconciliationRequired,
-    artworks: results,
-    sheetUrl: spreadsheetBrowserUrl(archive.sheetId),
-    driveRootUrl: archiveRootUrl ?? storage.getArchiveRootUrl(),
-  };
+  return completedResult;
 }

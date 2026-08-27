@@ -1,59 +1,224 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 import { BatchStepHeading } from "@/components/artwork/BatchStepHeading";
 import { formatFileSize } from "@/lib/artwork/validation";
-import type { BatchSubmissionResult } from "@/lib/submission/types";
+import {
+  failedArtworkProgressLines,
+  failedDuringLabel,
+  partitionBatchArtworkResults,
+  submissionReportHeading,
+  submissionReportLead,
+  summarizeBatchArtworkResults,
+} from "@/lib/submission/batch-results";
+import type {
+  ArtworkSubmissionFailure,
+  ArtworkSubmissionSuccess,
+  BatchSubmissionResult,
+} from "@/lib/submission/types";
 
 type BatchSubmissionReportProps = {
   result: Extract<BatchSubmissionResult, { ok: true }>;
   onStartNewBatch: () => void;
 };
 
-const STAGE_LABELS: Record<string, string> = {
-  pending: "Pending",
-  claimed: "Claimed",
-  processing: "Processing",
-  folder_created: "Creating Dropbox folder",
-  master_uploaded: "Uploading Master",
-  derivatives_generated: "Generating all file sizes",
-  hr_uploaded: "Uploading High Resolution",
-  web_uploaded: "Uploading Web",
-  thumb_uploaded: "Uploading thumbnail",
-  metadata_uploaded: "Writing metadata file",
-  sheet_row_appended: "Writing Inventory",
-  completed: "Complete",
-  failed: "Failed",
-  reconciliation_required: "Reconciliation required",
-};
-
-const OPERATION_LABELS: Record<string, string> = {
-  mark_claim_processing: "Marking claim Processing",
-  create_folder: "Creating Dropbox folder",
-  upload_master: "Uploading Master",
-  generate_derivatives: "Generating all file sizes",
-  generate_thumbnail: "Generating thumbnail",
-  upload_hr: "Uploading High Resolution",
-  upload_web: "Uploading Web",
-  upload_thumb: "Uploading thumbnail",
-  upload_metadata: "Uploading metadata file",
-  append_inventory_row: "Writing Inventory",
-  mark_claim_completed: "Complete",
-};
-
-function stageLabel(stage: string): string {
-  return STAGE_LABELS[stage] ?? stage.replace(/_/g, " ");
+function ResultCard({
+  children,
+  accent = "default",
+}: {
+  children: ReactNode;
+  accent?: "default" | "danger" | "attention";
+}) {
+  const border =
+    accent === "danger"
+      ? "border-[var(--danger)]"
+      : accent === "attention"
+        ? "border-[var(--accent)]"
+        : "border-[var(--line)]";
+  return (
+    <article className={`border ${border} bg-[var(--surface)] p-4`}>
+      {children}
+    </article>
+  );
 }
 
-function operationLabel(operation: string): string {
-  return OPERATION_LABELS[operation] ?? operation.replace(/_/g, " ");
+function SuccessArtworkCard({ artwork }: { artwork: ArtworkSubmissionSuccess }) {
+  return (
+    <ResultCard>
+      <p className="text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
+        Inventory {artwork.inventoryId}
+      </p>
+      <h3 className="mt-1 font-display text-2xl text-[var(--ink)]">
+        {artwork.title}
+      </h3>
+      <ul className="mt-3 space-y-1 text-sm">
+        {artwork.driveFolder ? (
+          <li>
+            <a
+              href={artwork.driveFolder.webViewLink}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--accent)] underline-offset-2 hover:underline"
+            >
+              Dropbox folder
+            </a>
+          </li>
+        ) : null}
+        {artwork.master ? (
+          <li>
+            <a
+              href={artwork.master.webViewLink}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--accent)] underline-offset-2 hover:underline"
+            >
+              Master
+            </a>
+          </li>
+        ) : null}
+        {artwork.hr ? (
+          <li>
+            <a
+              href={artwork.hr.webViewLink}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--accent)] underline-offset-2 hover:underline"
+            >
+              High resolution
+            </a>
+          </li>
+        ) : null}
+        {artwork.web ? (
+          <li>
+            <a
+              href={artwork.web.webViewLink}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--accent)] underline-offset-2 hover:underline"
+            >
+              Web
+            </a>
+          </li>
+        ) : null}
+        <li className="text-[var(--ink)]">Inventory row recorded</li>
+      </ul>
+    </ResultCard>
+  );
+}
+
+function FailedArtworkCard({ artwork }: { artwork: ArtworkSubmissionFailure }) {
+  return (
+    <ResultCard accent="danger">
+      <h3 className="font-display text-2xl text-[var(--ink)]">{artwork.title}</h3>
+      {artwork.inventoryId != null ? (
+        <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
+          Inventory {artwork.inventoryId}
+        </p>
+      ) : null}
+      <ul className="mt-3 space-y-1 text-sm text-[var(--ink)]">
+        <li>Failed during: {failedDuringLabel(artwork.failedOperation, artwork.stage)}</li>
+        {failedArtworkProgressLines(artwork).map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      <p className="mt-3 text-sm text-[var(--ink)]">{artwork.message}</p>
+    </ResultCard>
+  );
+}
+
+function ReconciliationArtworkCard({
+  artwork,
+}: {
+  artwork: ArtworkSubmissionSuccess;
+}) {
+  return (
+    <ResultCard accent="attention">
+      <p className="text-[11px] uppercase tracking-[0.14em] text-[var(--accent)]">
+        Inventory {artwork.inventoryId} · Reconciliation required
+      </p>
+      <h3 className="mt-1 font-display text-2xl text-[var(--ink)]">
+        {artwork.title}
+      </h3>
+      <ul className="mt-3 space-y-1 text-sm">
+        {artwork.driveFolder ? (
+          <li>
+            <a
+              href={artwork.driveFolder.webViewLink}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--accent)] underline-offset-2 hover:underline"
+            >
+              Dropbox folder
+            </a>
+          </li>
+        ) : null}
+        {artwork.master ? (
+          <li>
+            <a
+              href={artwork.master.webViewLink}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--accent)] underline-offset-2 hover:underline"
+            >
+              Master
+            </a>
+          </li>
+        ) : null}
+        {artwork.hr ? (
+          <li>
+            <a
+              href={artwork.hr.webViewLink}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--accent)] underline-offset-2 hover:underline"
+            >
+              High resolution
+            </a>
+          </li>
+        ) : null}
+        {artwork.web ? (
+          <li>
+            <a
+              href={artwork.web.webViewLink}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--accent)] underline-offset-2 hover:underline"
+            >
+              Web
+            </a>
+          </li>
+        ) : null}
+        <li className="text-[var(--ink)]">
+          {artwork.sheetRowWritten
+            ? "Inventory row recorded"
+            : "Inventory row not recorded"}
+        </li>
+      </ul>
+      {artwork.reconciliationWarnings.length > 0 ? (
+        <div
+          role="status"
+          className="mt-3 border border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-2 text-sm"
+        >
+          {artwork.reconciliationWarnings.map((warning) => (
+            <p key={warning.code}>{warning.message}</p>
+          ))}
+        </div>
+      ) : null}
+    </ResultCard>
+  );
 }
 
 export function BatchSubmissionReport({
   result,
   onStartNewBatch,
 }: BatchSubmissionReportProps) {
-  const successes = result.artworks.filter((a) => a.ok);
-  const failures = result.artworks.filter((a) => !a.ok);
+  const summary = summarizeBatchArtworkResults(result.artworks);
+  const { successes, failures, reconciliations } = partitionBatchArtworkResults(
+    result.artworks,
+  );
+  const heading = submissionReportHeading(summary);
+  const lead = submissionReportLead(summary);
 
   return (
     <div className="animate-fade-in">
@@ -62,7 +227,7 @@ export function BatchSubmissionReport({
           Kim Artwork Archive
         </p>
         <div className="mt-3 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-          <BatchStepHeading>Submission complete</BatchStepHeading>
+          <BatchStepHeading>{heading}</BatchStepHeading>
           <button
             type="button"
             onClick={onStartNewBatch}
@@ -72,8 +237,7 @@ export function BatchSubmissionReport({
           </button>
         </div>
         <p className="mt-4 max-w-2xl text-[var(--muted)] leading-relaxed">
-          Artwork files and metadata have been saved to Dropbox. Inventory
-          details have been added to Google Sheets.
+          {lead}
         </p>
       </header>
 
@@ -107,26 +271,26 @@ export function BatchSubmissionReport({
             <dt className="text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
               Total artworks
             </dt>
-            <dd className="text-sm text-[var(--ink)]">{result.total}</dd>
+            <dd className="text-sm text-[var(--ink)]">{summary.total}</dd>
           </div>
           <div>
             <dt className="text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
               Completed
             </dt>
-            <dd className="text-sm text-[var(--ink)]">{result.completed}</dd>
+            <dd className="text-sm text-[var(--ink)]">{summary.completed}</dd>
           </div>
           <div>
             <dt className="text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
               Failed
             </dt>
-            <dd className="text-sm text-[var(--ink)]">{result.failed}</dd>
+            <dd className="text-sm text-[var(--ink)]">{summary.failed}</dd>
           </div>
           <div>
             <dt className="text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
               Reconciliation required
             </dt>
             <dd className="text-sm text-[var(--ink)]">
-              {result.reconciliationRequired}
+              {summary.reconciliationRequired}
             </dd>
           </div>
           <div className="sm:col-span-2">
@@ -157,81 +321,10 @@ export function BatchSubmissionReport({
             Successful artworks
           </h2>
           {successes.map((artwork) => (
-            <article
+            <SuccessArtworkCard
               key={artwork.clientArtworkId}
-              className="border border-[var(--line)] bg-[var(--surface)] p-4"
-            >
-              <p className="text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
-                Inventory {artwork.inventoryId}
-                {artwork.stage === "reconciliation_required"
-                  ? " · Reconciliation required"
-                  : ""}
-              </p>
-              <h3 className="mt-1 font-display text-2xl text-[var(--ink)]">
-                {artwork.title}
-              </h3>
-              <ul className="mt-3 space-y-1 text-sm">
-                {artwork.driveFolder ? (
-                  <li>
-                    <a
-                      href={artwork.driveFolder.webViewLink}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[var(--accent)] underline-offset-2 hover:underline"
-                    >
-                      Dropbox folder
-                    </a>
-                  </li>
-                ) : null}
-                {artwork.master ? (
-                  <li>
-                    <a
-                      href={artwork.master.webViewLink}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[var(--accent)] underline-offset-2 hover:underline"
-                    >
-                      Master
-                    </a>
-                  </li>
-                ) : null}
-                {artwork.hr ? (
-                  <li>
-                    <a
-                      href={artwork.hr.webViewLink}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[var(--accent)] underline-offset-2 hover:underline"
-                    >
-                      High resolution
-                    </a>
-                  </li>
-                ) : null}
-                {artwork.web ? (
-                  <li>
-                    <a
-                      href={artwork.web.webViewLink}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[var(--accent)] underline-offset-2 hover:underline"
-                    >
-                      Web
-                    </a>
-                  </li>
-                ) : null}
-                <li className="text-[var(--ink)]">Inventory row recorded</li>
-              </ul>
-              {artwork.reconciliationWarnings.length > 0 ? (
-                <div
-                  role="status"
-                  className="mt-3 border border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-2 text-sm"
-                >
-                  {artwork.reconciliationWarnings.map((warning) => (
-                    <p key={warning.code}>{warning.message}</p>
-                  ))}
-                </div>
-              ) : null}
-            </article>
+              artwork={artwork}
+            />
           ))}
         </section>
       ) : null}
@@ -244,50 +337,31 @@ export function BatchSubmissionReport({
           >
             Failed artworks
           </h2>
-          <p className="text-sm text-[var(--muted)]">
-            Failed inventory IDs remain consumed. Inspect Failed Intake, then
-            start a new batch for any work that needs resubmission. Do not
-            automatically retry.
-          </p>
           {failures.map((artwork) => (
-            <article
+            <FailedArtworkCard
               key={artwork.clientArtworkId}
-              className="border border-[var(--danger)] bg-[var(--danger-soft)] p-4"
-            >
-              <p className="text-[11px] uppercase tracking-[0.14em] text-[var(--danger)]">
-                {artwork.inventoryId != null
-                  ? `Inventory ${artwork.inventoryId}`
-                  : "No inventory ID"}
-                {artwork.failedOperation
-                  ? ` · Failed during ${operationLabel(artwork.failedOperation)}`
-                  : ` · Failed at ${stageLabel(artwork.stage)}`}
-              </p>
-              <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
-                Last completed: {stageLabel(artwork.lastCompletedStage)}
-              </p>
-              <h3 className="mt-1 font-display text-2xl text-[var(--ink)]">
-                {artwork.title}
-              </h3>
-              <p className="mt-2 text-sm text-[var(--ink)]">{artwork.message}</p>
-              <p className="mt-2 text-sm text-[var(--muted)]">
-                Folder moved to Failed Intake:{" "}
-                {artwork.cleanup.folderMovedToFailedIntake === null
-                  ? "not applicable"
-                  : artwork.cleanup.folderMovedToFailedIntake
-                    ? "yes"
-                    : "no"}
-              </p>
-              {artwork.cleanup.cleanupWarnings.map((warning) => (
-                <p key={warning} className="mt-1 text-sm text-[var(--danger)]">
-                  Cleanup warning: {warning}
-                </p>
-              ))}
-              {artwork.reconciliationWarnings.map((warning) => (
-                <p key={warning.code} className="mt-1 text-sm text-[var(--danger)]">
-                  Reconciliation: {warning.message}
-                </p>
-              ))}
-            </article>
+              artwork={artwork}
+            />
+          ))}
+        </section>
+      ) : null}
+
+      {reconciliations.length > 0 ? (
+        <section
+          className="mt-10 space-y-4"
+          aria-labelledby="reconciliation-heading"
+        >
+          <h2
+            id="reconciliation-heading"
+            className="font-display text-xl text-[var(--ink)]"
+          >
+            Reconciliation required
+          </h2>
+          {reconciliations.map((artwork) => (
+            <ReconciliationArtworkCard
+              key={artwork.clientArtworkId}
+              artwork={artwork}
+            />
           ))}
         </section>
       ) : null}

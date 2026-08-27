@@ -57,6 +57,14 @@ import { formatFileSize } from "@/lib/artwork/validation";
 import { LARGE_MASTER_PREVIEW_UNAVAILABLE_MESSAGE } from "@/lib/images/preview-client";
 import { emptyCleanupResult } from "@/lib/submission/types";
 import {
+  buildCompletedBatchResult,
+  createArtworkSubmissionFailure,
+} from "@/lib/submission/batch-results";
+import type {
+  ArtworkSubmissionSuccess,
+  DriveResourceRef,
+} from "@/lib/submission/types";
+import {
   BatchSubmittingStatusView,
   submittingWaitLabel,
 } from "@/components/artwork/BatchSubmittingStatusView";
@@ -93,6 +101,52 @@ const confirmViewPath = join(
 
 const DECODE_FAILURE =
   "The image could not be decoded. It may be corrupted or an unsupported variant.";
+
+function sampleDriveRef(name: string): DriveResourceRef {
+  return {
+    id: name,
+    name,
+    webViewLink: `https://example.test/${name}`,
+  };
+}
+
+function sampleSuccess(params: {
+  clientArtworkId: string;
+  title: string;
+  order: number;
+  inventoryId: number;
+}): ArtworkSubmissionSuccess {
+  return {
+    ok: true,
+    clientArtworkId: params.clientArtworkId,
+    order: params.order,
+    title: params.title,
+    inventoryId: params.inventoryId,
+    claimId: `claim-${params.inventoryId}`,
+    stage: "completed",
+    driveFolder: sampleDriveRef("folder"),
+    master: sampleDriveRef("master"),
+    hr: sampleDriveRef("hr"),
+    web: sampleDriveRef("web"),
+    thumb: sampleDriveRef("thumb"),
+    metadata: sampleDriveRef("meta"),
+    sheetRowWritten: true,
+    claimStatus: "Completed",
+    cleanup: emptyCleanupResult(),
+    startedAt: "2026-08-25T00:00:00.000Z",
+    finishedAt: "2026-08-25T00:00:00.000Z",
+    reconciliationWarnings: [],
+  };
+}
+
+function countSectionCards(markup: string, headingId: string): number {
+  const start = markup.indexOf(`id="${headingId}"`);
+  if (start < 0) return 0;
+  const rest = markup.slice(start);
+  const nextSection = rest.indexOf("<section", 1);
+  const block = nextSection === -1 ? rest : rest.slice(0, nextSection);
+  return (block.match(/<article/g) ?? []).length;
+}
 
 const waitingPanelProps = {
   inventoryId: 1405,
@@ -475,6 +529,9 @@ const tests: TestCase[] = [
       );
       assert(markup.includes("42% uploaded"), "upload percent");
       assert(markup.includes("Uploading master to Dropbox…"), "upload stage");
+      assert(markup.includes("Blue Garden"), "progress starts with title");
+      assert(!markup.includes("Preview inventory"), "no preview inventory on progress");
+      assert(!markup.includes("Artwork 01"), "no artwork sequence on progress");
       assert(
         markup.includes("Derivative generation failed. Retry keeps this inventory ID."),
         "failure copy",
@@ -563,6 +620,14 @@ const tests: TestCase[] = [
         "shared summary helper removed",
       );
       assert(
+        !reviewSource.includes("formatArtworkNumber"),
+        "review cards do not format an artwork sequence number",
+      );
+      assert(
+        !reviewSource.includes("Preview inventory"),
+        "review source has no preview-inventory label",
+      );
+      assert(
         !reviewSource.includes("enterOnMount"),
         "Review Batch enters the step on mount, not on later updates",
       );
@@ -602,6 +667,15 @@ const tests: TestCase[] = [
       assert(
         markup.includes(`id="${BATCH_STEP_HEADING_ID}"`),
         "stable step heading id",
+      );
+      assert(markup.includes("Tulip Tree") || markup.includes("Tulip-Tree"), "title shown");
+      assert(!markup.includes("Preview inventory"), "no preview inventory line");
+      assert(!markup.includes("Artwork 01"), "no artwork sequence number");
+      assert(!markup.includes("PREVIEW INVENTORY"), "no preview inventory caps");
+      assert(!markup.includes("Preview 1000"), "no preview id beside title");
+      assert(
+        !markup.includes("Preview inventory numbers are temporary"),
+        "review intro does not mention preview inventory",
       );
       assert(markup.includes('tabindex="-1"'), "programmatically focusable");
       assert(markup.includes("outline-none"), "no mouse focus ring");
@@ -719,6 +793,9 @@ const tests: TestCase[] = [
         markup.includes("This master is over"),
         "card-level large-file copy",
       );
+      assert(markup.includes("Vaux's Swift Watch") || markup.includes("Vaux"), "title shown");
+      assert(!markup.includes("Preview inventory"), "no preview inventory on large-file card");
+      assert(!markup.includes("Artwork 01"), "no artwork sequence on large-file card");
       assert(!markup.includes("Test image processing"), "no test button");
       assert(!markup.includes("Use Dropbox intake"), "old test-button label gone");
       assert(!markup.includes("Status: Not tested"), "no not-tested status");
@@ -727,7 +804,7 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "edit screen lists Batch summary before Shared details and has no selection banner",
+    name: "edit screen lists Upload artwork images, then Shared details, with no selection banner",
     run: () => {
       const formPath = join(
         dirname(fileURLToPath(import.meta.url)),
@@ -744,6 +821,10 @@ const tests: TestCase[] = [
         !/uploadNotice \? \(/.test(formSource),
         "upload notice is not a conditional visual banner",
       );
+      assert(
+        !formSource.includes("BatchSummaryBar"),
+        "batch summary bar is not rendered on the edit screen",
+      );
 
       const appended = appendFilesToBatch(
         createEmptyBatch(),
@@ -758,22 +839,28 @@ const tests: TestCase[] = [
       const markup = renderToStaticMarkup(
         <NewArtworkBatchForm initialBatch={appended.batch} />,
       );
-      const summaryIndex = markup.indexOf("Batch summary");
+      const uploadIndex = markup.indexOf("Upload artwork images");
       const sharedIndex = markup.indexOf("Shared details for this batch");
       const artworksIndex = markup.indexOf('id="artworks-heading"');
-      assert(summaryIndex > -1, "Batch summary present");
-      assert(sharedIndex > summaryIndex, "Shared details after Batch summary");
+      assert(uploadIndex > -1, "upload panel remains after selection");
+      assert(sharedIndex > uploadIndex, "Shared details after upload panel");
       assert(artworksIndex > sharedIndex, "Artworks after Shared details");
-      assert(!markup.includes("images selected"), "no selection banner copy");
+      const between = markup.slice(uploadIndex, sharedIndex);
+      assert(!between.includes("images selected"), "no selection banner copy");
       assert(
-        !markup.includes("artwork entries created"),
+        !between.includes("artwork entries created"),
         "no artwork-created banner copy",
       );
+      assert(!between.includes("Batch summary"), "no summary bar between sections");
       assert(
         !markup.includes("Apply Untitled to selected artworks"),
         "no bulk untitled button",
       );
       assert(markup.includes("Missing / no known title"), "per-artwork untitled");
+      assert(!markup.includes("Preview inventory"), "edit cards omit preview inventory");
+      assert(!markup.includes("Artwork 01"), "edit cards omit sequence number");
+      assert(!markup.includes("Preview inventory"), "edit cards omit preview inventory");
+      assert(!markup.includes("Artwork 01"), "edit cards omit sequence number");
     },
   },
   {
@@ -1389,6 +1476,235 @@ const tests: TestCase[] = [
         viewSource.includes("startedRef.current = true"),
         "confirm click is recorded before onConfirm",
       );
+    },
+  },
+  {
+    name: "Review Batch records a result for client-side failures instead of skipping them",
+    run: () => {
+      const source = readFileSync(reviewPath, "utf8");
+      assert(
+        source.includes("createArtworkSubmissionFailure"),
+        "client failures become result objects",
+      );
+      assert(
+        source.includes("normalizeArtworkSubmissionResult"),
+        "process payloads are normalized",
+      );
+      assert(
+        source.includes("buildCompletedBatchResult"),
+        "completion state is built from the result array",
+      );
+      assert(
+        source.includes("results.push(processResult)"),
+        "process results are retained",
+      );
+      const pushFailureIndex = source.indexOf("const pushFailure");
+      assert(pushFailureIndex > -1, "pushFailure helper exists");
+      assert(
+        source.slice(pushFailureIndex, pushFailureIndex + 800).includes("results.push(result)"),
+        "pushFailure appends to the batch result array",
+      );
+      const missingFileIndex = source.indexOf(
+        "Source file is missing from this browser session.",
+      );
+      assert(missingFileIndex > -1, "missing-file path exists");
+      assert(
+        source.slice(missingFileIndex - 200, missingFileIndex).includes("pushFailure"),
+        "missing file is recorded as a failed result",
+      );
+      const linkFailIndex = source.indexOf('stage: "Requesting upload link"');
+      assert(linkFailIndex > -1, "upload-link failure path exists");
+      assert(
+        source.slice(linkFailIndex - 120, linkFailIndex).includes("pushFailure"),
+        "upload-link failure is recorded",
+      );
+      const masterFailIndex = source.indexOf(
+        "Dropbox rejected the master upload.",
+      );
+      assert(masterFailIndex > -1, "master-upload failure path exists");
+      assert(
+        source.slice(masterFailIndex - 160, masterFailIndex).includes("pushFailure"),
+        "master-upload failure is recorded",
+      );
+    },
+  },
+  {
+    name: "completion page shows every artwork once and derives counts from cards",
+    run: () => {
+      const artworks = [
+        sampleSuccess({
+          clientArtworkId: "art-1",
+          title: "Tulip Tree",
+          order: 0,
+          inventoryId: 1100,
+        }),
+        createArtworkSubmissionFailure({
+          clientArtworkId: "art-2",
+          order: 1,
+          title: "Red Field",
+          inventoryId: 1405,
+          lastCompletedStage: "master_uploaded",
+          failedOperation: "upload_hr",
+          message: "High-resolution upload was rejected.",
+          driveFolder: sampleDriveRef("folder"),
+          master: sampleDriveRef("master"),
+        }),
+        {
+          ...sampleSuccess({
+            clientArtworkId: "art-3",
+            title: "Cedar Waxwing",
+            order: 2,
+            inventoryId: 1102,
+          }),
+          stage: "reconciliation_required" as const,
+          claimStatus: "Processing" as const,
+          reconciliationWarnings: [
+            {
+              code: "INVENTORY_ROW_WITHOUT_COMPLETED_CLAIM" as const,
+              message:
+                "Dropbox files and the Artwork Inventory row exist, but the claim status could not be marked Completed.",
+            },
+          ],
+        },
+      ];
+      const drifted = buildCompletedBatchResult({
+        submissionAttemptId: "attempt-mix",
+        archiveTarget: "test",
+        completedAt: "2026-08-25T00:00:00.000Z",
+        artworks,
+        sheetUrl: null,
+        driveRootUrl: null,
+      });
+      drifted.failed = 0;
+      drifted.reconciliationRequired = 0;
+      drifted.completed = 3;
+      drifted.total = 3;
+
+      const markup = renderToStaticMarkup(
+        <BatchSubmissionReport
+          result={drifted}
+          onStartNewBatch={() => undefined}
+        />,
+      );
+
+      assert(markup.includes("Submission finished with issues"), "issues heading");
+      assert(!markup.includes("Submission complete"), "not fully complete");
+      assert(
+        markup.includes(
+          "3 artworks were submitted. 1 completed successfully and 2 need attention.",
+        ),
+        "accurate lead",
+      );
+      assert(!markup.includes("have been saved to Dropbox"), "no full-success copy");
+
+      const summaryStart = markup.indexOf('id="batch-summary-heading"');
+      const successStart = markup.indexOf('id="success-heading"');
+      assert(summaryStart > -1 && successStart > summaryStart, "summary then successes");
+      const summaryMarkup = markup.slice(summaryStart, successStart);
+      const failedDt = summaryMarkup.indexOf("Failed");
+      assert(failedDt > -1, "failed summary label");
+      assert(
+        summaryMarkup.slice(failedDt, failedDt + 120).includes(">1</dd>"),
+        "failed count is 1 even when payload said 0",
+      );
+
+      assertEqual(countSectionCards(markup, "success-heading"), 1, "one success card");
+      assertEqual(countSectionCards(markup, "failed-heading"), 1, "one failed card");
+      assertEqual(
+        countSectionCards(markup, "reconciliation-heading"),
+        1,
+        "one reconciliation card",
+      );
+      assertEqual(
+        countSectionCards(markup, "success-heading") +
+          countSectionCards(markup, "failed-heading") +
+          countSectionCards(markup, "reconciliation-heading"),
+        3,
+        "every submitted artwork appears once",
+      );
+      assert(markup.includes("Tulip Tree"), "success title");
+      assert(markup.includes("Red Field"), "failed title");
+      assert(markup.includes("Cedar Waxwing"), "recon title");
+      assert(markup.includes("Failed during: High-resolution upload"), "failed step");
+      assert(markup.includes("Master file saved"), "saved before failure");
+      assert(markup.includes("High resolution failed"), "failed step named");
+      assert(markup.includes("Web version not attempted"), "later step skipped");
+      assert(markup.includes("Inventory row not recorded"), "sheet not written");
+      assert(markup.includes("High-resolution upload was rejected."), "user message");
+      assert(markup.includes('id="reconciliation-heading"'), "recon section");
+      assert(!markup.includes("Failed inventory IDs remain consumed"), "no claims recovery jargon");
+    },
+  },
+  {
+    name: "completion page all-success heading stays Submission complete",
+    run: () => {
+      const markup = renderToStaticMarkup(
+        <BatchSubmissionReport
+          result={buildCompletedBatchResult({
+            submissionAttemptId: "attempt-ok",
+            archiveTarget: "production",
+            completedAt: "2026-08-25T00:00:00.000Z",
+            artworks: [
+              sampleSuccess({
+                clientArtworkId: "art-1",
+                title: "Tulip Tree",
+                order: 0,
+                inventoryId: 1100,
+              }),
+            ],
+            sheetUrl: null,
+            driveRootUrl: null,
+          })}
+          onStartNewBatch={() => undefined}
+        />,
+      );
+      assert(markup.includes("Submission complete"), "success heading");
+      assert(!markup.includes("Submission finished with issues"), "no issues heading");
+      assert(!markup.includes('id="failed-heading"'), "no failed section");
+      assert(!markup.includes('id="reconciliation-heading"'), "no recon section");
+      assertEqual(countSectionCards(markup, "success-heading"), 1, "one success card");
+    },
+  },
+  {
+    name: "completion page lists a failure before inventory ID and keeps successes visible",
+    run: () => {
+      const markup = renderToStaticMarkup(
+        <BatchSubmissionReport
+          result={buildCompletedBatchResult({
+            submissionAttemptId: "attempt-pre-id",
+            archiveTarget: "test",
+            completedAt: "2026-08-25T00:00:00.000Z",
+            artworks: [
+              sampleSuccess({
+                clientArtworkId: "art-1",
+                title: "Tulip Tree",
+                order: 0,
+                inventoryId: 1100,
+              }),
+              createArtworkSubmissionFailure({
+                clientArtworkId: "art-2",
+                order: 1,
+                title: "Lost File",
+                inventoryId: null,
+                lastCompletedStage: "pending",
+                failedOperation: null,
+                errorCode: "MISSING_FILE",
+                message: "Source file is missing from this browser session.",
+              }),
+            ],
+            sheetUrl: null,
+            driveRootUrl: null,
+          })}
+          onStartNewBatch={() => undefined}
+        />,
+      );
+      assert(markup.includes("Successful artworks"), "success section remains");
+      assert(markup.includes("Tulip Tree"), "successful artwork still listed");
+      assert(markup.includes("Failed artworks"), "failed section");
+      assert(markup.includes("Lost File"), "failed title");
+      assert(!markup.includes("Inventory null"), "no null inventory");
+      assertEqual(countSectionCards(markup, "success-heading"), 1, "success card");
+      assertEqual(countSectionCards(markup, "failed-heading"), 1, "failed card");
     },
   },
 ];

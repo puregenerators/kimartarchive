@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 
 import { unauthorizedApiResponse } from "@/lib/auth/access";
+import { createArtworkSubmissionFailure } from "@/lib/submission/batch-results";
 import { processArtworkFromDropbox } from "@/lib/submission/process-from-dropbox";
 import { runSubmissionPreflight } from "@/lib/submission/preflight";
 import type { ArtworkSubmissionInput } from "@/lib/submission/types";
@@ -46,6 +47,14 @@ export async function POST(request: Request) {
   const denied = await unauthorizedApiResponse();
   if (denied) return denied;
 
+  let identity = {
+    clientArtworkId: "",
+    order: 0,
+    title: "Untitled",
+    inventoryId: null as number | null,
+    claimId: null as string | null,
+  };
+
   try {
     const body = (await request.json()) as Record<string, unknown>;
     const artwork = parseArtworkEntry(body.artwork);
@@ -53,13 +62,23 @@ export async function POST(request: Request) {
       body.shared && typeof body.shared === "object"
         ? (body.shared as Record<string, unknown>)
         : null;
+    const inventoryId = Number(body.inventoryId ?? 0);
+    identity = {
+      clientArtworkId: artwork?.clientArtworkId || String(body.clientArtworkId ?? ""),
+      order: artwork?.order ?? 0,
+      title: artwork?.title || "Untitled",
+      inventoryId: Number.isFinite(inventoryId) && inventoryId > 0 ? inventoryId : null,
+      claimId: String(body.claimId ?? "") || null,
+    };
     if (!artwork || !sharedRaw) {
       return NextResponse.json(
-        {
-          ok: false,
+        createArtworkSubmissionFailure({
+          ...identity,
+          lastCompletedStage: "claimed",
+          failedOperation: "generate_derivatives",
           errorCode: "INVALID_BATCH",
           message: "Request must include JSON `artwork` and `shared`.",
-        },
+        }),
         { status: 400 },
       );
     }
@@ -67,11 +86,13 @@ export async function POST(request: Request) {
     const preflight = await runSubmissionPreflight();
     if (!preflight.ok) {
       return NextResponse.json(
-        {
-          ok: false,
+        createArtworkSubmissionFailure({
+          ...identity,
+          lastCompletedStage: "claimed",
+          failedOperation: "generate_derivatives",
           errorCode: "PREFLIGHT_FAILED",
           message: preflight.message,
-        },
+        }),
         { status: 503 },
       );
     }
@@ -102,11 +123,14 @@ export async function POST(request: Request) {
       }),
     );
     return NextResponse.json(
-      {
-        ok: false,
+      createArtworkSubmissionFailure({
+        ...identity,
+        lastCompletedStage: "master_uploaded",
+        failedOperation: null,
         errorCode: "UNKNOWN",
-        message: "Processing failed unexpectedly. The master in Dropbox was not deleted.",
-      },
+        message:
+          "Processing failed unexpectedly. The master in Dropbox was not deleted.",
+      }),
       { status: 500 },
     );
   }

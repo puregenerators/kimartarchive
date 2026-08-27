@@ -19,7 +19,6 @@ import { planFilenamesForArtwork } from "@/lib/artwork/filenames";
 import {
   MAX_FILE_SIZE_LABEL,
   effectiveOverride,
-  formatArtworkNumber,
   previewInventoryIdForIndex,
   requiresLargeFileDropboxIntake,
   type ArtworkDraft,
@@ -44,6 +43,12 @@ import {
   type LargeFileCheckResult,
   type LargeFileIntakeStatus,
 } from "@/lib/submission/large-file-intake-logic";
+import {
+  buildCompletedBatchResult,
+  createArtworkSubmissionFailure,
+  normalizeArtworkSubmissionResult,
+  preparedFolderRef,
+} from "@/lib/submission/batch-results";
 import type {
   ArtworkSubmissionResult,
   BatchSubmissionResult,
@@ -169,11 +174,7 @@ function ReviewArtworkCard({
         </div>
 
         <div>
-          <p className="text-[11px] uppercase tracking-[0.16em] text-[var(--muted)]">
-            Artwork {formatArtworkNumber(index)} · Preview inventory{" "}
-            {previewId}
-          </p>
-          <h3 className="mt-1 font-display text-2xl text-[var(--ink)]">
+          <h3 className="font-display text-2xl text-[var(--ink)]">
             {archivedTitle}
           </h3>
           {artwork.image &&
@@ -199,7 +200,7 @@ function ReviewArtworkCard({
           {plan ? (
             <div className="mt-4 max-w-xl">
               <p className="text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
-                Planned filenames (preview IDs only)
+                Planned filenames
               </p>
               <ul className="mt-2 space-y-2">
                 <li>
@@ -356,6 +357,13 @@ export function BatchReview({
     const recordFailure = (failure: SubmitFailureInfo) => {
       if (!firstFailure) firstFailure = failure;
     };
+    const results: ArtworkSubmissionResult[] = [];
+    let preparedMeta: {
+      submissionAttemptId: string;
+      archiveTarget: "test" | "production";
+      sheetUrl: string | null;
+      driveRootUrl: string | null;
+    } | null = null;
 
     try {
       const prepareResponse = await fetch("/api/artwork-batches/prepare", {
@@ -399,7 +407,12 @@ export function BatchReview({
       }
 
       preparedRef.current = prepared.artworks;
-      const results: ArtworkSubmissionResult[] = [];
+      preparedMeta = {
+        submissionAttemptId: prepared.submissionAttemptId,
+        archiveTarget: prepared.archiveTarget,
+        sheetUrl: prepared.sheetUrl,
+        driveRootUrl: prepared.driveRootUrl,
+      };
       const nextLargePanels: LargeFilePanelState[] = [];
 
       for (const ready of prepared.artworks) {
@@ -410,186 +423,239 @@ export function BatchReview({
         const title =
           artworks.find((entry) => entry.id === ready.clientArtworkId)?.title ||
           ready.masterFilename;
-        if (!artwork || !file) {
-          const message = "Source file is missing from this browser session.";
-          recordFailure({
-            message,
-            stage: "Preparing",
-            inventoryId: ready.inventoryId,
-          });
-          setItem(ready.clientArtworkId, title, {
-            stage: "Failed",
-            error: message,
-          });
-          continue;
-        }
+        const identity = {
+          clientArtworkId: ready.clientArtworkId,
+          order: ready.order,
+          title,
+          inventoryId: ready.inventoryId,
+          claimId: ready.claimId,
+          driveFolder: preparedFolderRef(ready),
+          lastCompletedStage: "folder_created" as const,
+        };
 
-        if (
-          ready.requiresManualDropboxUpload ||
-          requiresLargeFileDropboxIntake(file.size)
-        ) {
-          nextLargePanels.push({
-            clientArtworkId: ready.clientArtworkId,
-            title,
-            claimId: ready.claimId,
+        const pushFailure = (params: {
+          message: string;
+          stage: string;
+          errorCode?: "MISSING_FILE" | "DRIVE_UPLOAD_FAILED" | "UNKNOWN";
+          lastCompletedStage?: "pending" | "claimed" | "folder_created" | "master_uploaded";
+          failedOp?:
+            | "upload_master"
+            | "create_folder"
+            | "generate_derivatives"
+            | null;
+        }) => {
+          const result = createArtworkSubmissionFailure({
+            ...identity,
+            lastCompletedStage: params.lastCompletedStage ?? "folder_created",
+            failedOperation: params.failedOp ?? "upload_master",
+            errorCode: params.errorCode ?? "DRIVE_UPLOAD_FAILED",
+            message: params.message,
+          });
+          results.push(result);
+          recordFailure({
+            message: result.message,
+            stage: params.stage,
             inventoryId: ready.inventoryId,
-            folderName: ready.folderName,
-            masterFilename: ready.masterFilename,
-            folderWebUrl: ready.folderWebUrl,
-            status: ready.masterAlreadyUploaded
-              ? "master_found"
-              : "waiting_for_dropbox",
-            message: ready.masterAlreadyUploaded
-              ? "Master file found"
-              : "",
-            canContinueProcessing: Boolean(ready.masterAlreadyUploaded),
-            byteLengthLabel: formatFileSize(file.size),
           });
           setItem(ready.clientArtworkId, title, {
-            stage: "Waiting for Dropbox upload",
-            percent: null,
+            stage: params.stage,
+            percent: 1,
+            error: result.message,
+          });
+        };
+
+        try {
+          if (!artwork || !file) {
+            pushFailure({
+              message: "Source file is missing from this browser session.",
+              stage: "Preparing",
+              errorCode: "MISSING_FILE",
+              lastCompletedStage: "claimed",
+              failedOp: "upload_master",
+            });
+            continue;
+          }
+
+          if (
+            ready.requiresManualDropboxUpload ||
+            requiresLargeFileDropboxIntake(file.size)
+          ) {
+            nextLargePanels.push({
+              clientArtworkId: ready.clientArtworkId,
+              title,
+              claimId: ready.claimId,
+              inventoryId: ready.inventoryId,
+              folderName: ready.folderName,
+              masterFilename: ready.masterFilename,
+              folderWebUrl: ready.folderWebUrl,
+              status: ready.masterAlreadyUploaded
+                ? "master_found"
+                : "waiting_for_dropbox",
+              message: ready.masterAlreadyUploaded
+                ? "Master file found"
+                : "",
+              canContinueProcessing: Boolean(ready.masterAlreadyUploaded),
+              byteLengthLabel: formatFileSize(file.size),
+            });
+            setItem(ready.clientArtworkId, title, {
+              stage: "Waiting for Dropbox upload",
+              percent: null,
+              error: null,
+            });
+            continue;
+          }
+
+          setItem(ready.clientArtworkId, title, {
+            stage: ready.masterAlreadyUploaded
+              ? "Master already in Dropbox"
+              : "Requesting upload link…",
+            percent: ready.masterAlreadyUploaded ? 1 : 0,
             error: null,
           });
-          continue;
-        }
 
-        setItem(ready.clientArtworkId, title, {
-          stage: ready.masterAlreadyUploaded
-            ? "Master already in Dropbox"
-            : "Requesting upload link…",
-          percent: ready.masterAlreadyUploaded ? 1 : 0,
-          error: null,
-        });
-
-        const linkResponse = await fetch("/api/artwork-batches/upload-link", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            claimId: ready.claimId,
-            inventoryId: ready.inventoryId,
-            clientArtworkId: ready.clientArtworkId,
-            filename: ready.masterFilename,
-            dropboxPath: ready.masterPath,
-            mimeType: file.type,
-            byteLength: file.size,
-            year: artwork.year,
-            title: artwork.title,
-            originalFilename: artwork.originalFilename,
-          }),
-        });
-        const linkJson = (await linkResponse.json()) as
-          | {
-              ok: true;
-              alreadyUploaded: boolean;
-              uploadUrl?: string;
-            }
-          | { ok: false; message: string };
-
-        if (!linkJson.ok) {
-          recordFailure({
-            message: linkJson.message,
-            stage: "Requesting upload link",
-            inventoryId: ready.inventoryId,
-          });
-          setItem(ready.clientArtworkId, title, {
-            stage: "Upload link failed",
-            error: linkJson.message,
-          });
-          continue;
-        }
-
-        if (!linkJson.alreadyUploaded) {
-          if (!linkJson.uploadUrl) {
-            const message = "Dropbox did not return an upload link.";
-            recordFailure({
-              message,
-              stage: "Requesting upload link",
+          const linkResponse = await fetch("/api/artwork-batches/upload-link", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              claimId: ready.claimId,
               inventoryId: ready.inventoryId,
-            });
-            setItem(ready.clientArtworkId, title, {
-              stage: "Upload link failed",
-              error: message,
+              clientArtworkId: ready.clientArtworkId,
+              filename: ready.masterFilename,
+              dropboxPath: ready.masterPath,
+              mimeType: file.type,
+              byteLength: file.size,
+              year: artwork.year,
+              title: artwork.title,
+              originalFilename: artwork.originalFilename,
+            }),
+          });
+          let linkJson:
+            | {
+                ok: true;
+                alreadyUploaded: boolean;
+                uploadUrl?: string;
+              }
+            | { ok: false; message: string };
+          try {
+            linkJson = (await linkResponse.json()) as typeof linkJson;
+          } catch {
+            pushFailure({
+              message: "Could not read the Dropbox upload-link response.",
+              stage: "Requesting upload link",
+              failedOp: "upload_master",
             });
             continue;
           }
-          setItem(ready.clientArtworkId, title, {
-            stage: "Uploading master to Dropbox…",
-            percent: 0,
-          });
-          try {
-            await uploadMasterToTemporaryLink({
-              uploadUrl: linkJson.uploadUrl,
-              file,
-              onProgress: (ratio) => {
-                setItem(ready.clientArtworkId, title, {
-                  stage: "Uploading master to Dropbox…",
-                  percent: ratio,
-                });
-              },
+
+          if (!linkJson.ok) {
+            pushFailure({
+              message: linkJson.message,
+              stage: "Requesting upload link",
+              failedOp: "upload_master",
             });
-          } catch (error) {
-            const message =
+            continue;
+          }
+
+          if (!linkJson.alreadyUploaded) {
+            if (!linkJson.uploadUrl) {
+              pushFailure({
+                message: "Dropbox did not return an upload link.",
+                stage: "Requesting upload link",
+                failedOp: "upload_master",
+              });
+              continue;
+            }
+            setItem(ready.clientArtworkId, title, {
+              stage: "Uploading master to Dropbox…",
+              percent: 0,
+            });
+            try {
+              await uploadMasterToTemporaryLink({
+                uploadUrl: linkJson.uploadUrl,
+                file,
+                onProgress: (ratio) => {
+                  setItem(ready.clientArtworkId, title, {
+                    stage: "Uploading master to Dropbox…",
+                    percent: ratio,
+                  });
+                },
+              });
+            } catch (error) {
+              pushFailure({
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : "Dropbox rejected the master upload.",
+                stage: "Uploading master to Dropbox",
+                failedOp: "upload_master",
+              });
+              continue;
+            }
+          }
+
+          setItem(ready.clientArtworkId, title, {
+            stage: "Generating all file sizes",
+            percent: 1,
+          });
+
+          const processResponse = await fetch("/api/artwork-batches/process", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              submissionAttemptId: attemptIdRef.current,
+              artwork,
+              shared: payload.shared,
+              claimId: ready.claimId,
+              inventoryId: ready.inventoryId,
+              dropboxPath: ready.masterPath,
+            }),
+          });
+          let processJson: unknown;
+          try {
+            processJson = await processResponse.json();
+          } catch {
+            processJson = {
+              ok: false,
+              errorCode: "UNKNOWN",
+              message:
+                "Processing failed unexpectedly. The master in Dropbox was not deleted.",
+            };
+          }
+          const processResult = normalizeArtworkSubmissionResult(processJson, {
+            ...identity,
+            lastCompletedStage: "master_uploaded",
+            failedOperation: "generate_derivatives",
+          });
+          results.push(processResult);
+          if (!processResult.ok) {
+            recordFailure({
+              message: processResult.message || "Processing failed",
+              stage: processResult.failedOperation
+                ? processResult.failedOperation.replace(/_/g, " ")
+                : "Processing",
+              inventoryId: processResult.inventoryId,
+            });
+          }
+          setItem(ready.clientArtworkId, title, {
+            stage: processResult.ok
+              ? "Completed"
+              : processResult.message || "Processing failed",
+            percent: 1,
+            error: processResult.ok ? null : processResult.message,
+          });
+        } catch (error) {
+          pushFailure({
+            message:
               error instanceof Error
                 ? error.message
-                : "Dropbox rejected the master upload.";
-            recordFailure({
-              message,
-              stage: "Uploading master to Dropbox",
-              inventoryId: ready.inventoryId,
-            });
-            setItem(ready.clientArtworkId, title, {
-              stage: "Master upload failed",
-              error: message,
-            });
-            continue;
-          }
-        }
-
-        setItem(ready.clientArtworkId, title, {
-          stage: "Generating all file sizes",
-          percent: 1,
-        });
-
-        const processResponse = await fetch("/api/artwork-batches/process", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            submissionAttemptId: attemptIdRef.current,
-            artwork,
-            shared: payload.shared,
-            claimId: ready.claimId,
-            inventoryId: ready.inventoryId,
-            dropboxPath: ready.masterPath,
-          }),
-        });
-        const processResult =
-          (await processResponse.json()) as ArtworkSubmissionResult;
-        results.push(processResult);
-        if (!processResult.ok) {
-          recordFailure({
-            message: processResult.message || "Processing failed",
-            stage: processResult.failedOperation
-              ? processResult.failedOperation.replace(/_/g, " ")
-              : "Processing",
-            inventoryId: processResult.inventoryId,
+                : "This artwork could not be completed.",
+            stage: "Processing",
+            errorCode: "UNKNOWN",
+            failedOp: "generate_derivatives",
+            lastCompletedStage: "folder_created",
           });
         }
-        setItem(ready.clientArtworkId, title, {
-          stage: processResult.ok
-            ? "Completed"
-            : processResult.message || "Processing failed",
-          percent: 1,
-          error: processResult.ok ? null : processResult.message,
-        });
       }
-
-      const completed = results.filter(
-        (result) => result.ok && result.stage === "completed",
-      ).length;
-      const reconciliationRequired = results.filter(
-        (result) => result.ok && result.stage === "reconciliation_required",
-      ).length;
-      const failed = results.filter((result) => !result.ok).length;
 
       if (nextLargePanels.length > 0) {
         setLargeFilePanels(nextLargePanels);
@@ -608,28 +674,32 @@ export function BatchReview({
         return;
       }
 
-      setSubmissionResult({
-        ok: true,
-        kind: "completed",
-        submissionAttemptId: prepared.submissionAttemptId,
-        archiveTarget: prepared.archiveTarget,
-        completedAt: new Date().toISOString(),
-        total: results.length,
-        completed,
-        failed,
-        reconciliationRequired,
-        artworks: results,
-        sheetUrl: prepared.sheetUrl,
-        driveRootUrl: prepared.driveRootUrl,
-      });
+      setSubmissionResult(
+        buildCompletedBatchResult({
+          submissionAttemptId: prepared.submissionAttemptId,
+          archiveTarget: prepared.archiveTarget,
+          artworks: results,
+          sheetUrl: prepared.sheetUrl,
+          driveRootUrl: prepared.driveRootUrl,
+        }),
+      );
       stopSubmitting();
     } catch {
-      setSubmitError(
-        firstFailure ?? {
-          message:
-            "Could not finish submission. The master may already be in Dropbox. Retry processing before starting a new attempt.",
-        },
-      );
+      if (results.length > 0 && preparedMeta) {
+        setSubmissionResult(
+          buildCompletedBatchResult({
+            ...preparedMeta,
+            artworks: results,
+          }),
+        );
+      } else {
+        setSubmitError(
+          firstFailure ?? {
+            message:
+              "Could not finish submission. The master may already be in Dropbox. Retry processing before starting a new attempt.",
+          },
+        );
+      }
       stopSubmitting();
     }
   }
@@ -767,7 +837,7 @@ export function BatchReview({
           <p className="mt-4 text-[var(--muted)] leading-relaxed">
             {largeFilePanels.length > 0
               ? largeFileNeedsUploadHeading(largeFilePanels.length)
-              : `${artworks.length} artwork${artworks.length === 1 ? "" : "s"} ready for review. Preview inventory numbers are temporary.`}
+              : `${artworks.length} artwork${artworks.length === 1 ? "" : "s"} ready for review.`}
           </p>
         </header>
 

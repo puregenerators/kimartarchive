@@ -10,11 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { ApplySharedDetailsConfirmationView } from "@/components/artwork/ApplySharedDetailsConfirmationView";
 import { BatchSubmissionReport } from "@/components/artwork/BatchSubmissionReport";
-import {
-  BATCH_SUMMARY_ADD_IMAGES_INPUT_ID,
-  BATCH_SUMMARY_FULL_DESCRIPTION_ID,
-  BatchSummaryBar,
-} from "@/components/artwork/BatchSummaryBar";
+import { BatchSummaryBar } from "@/components/artwork/BatchSummaryBar";
 import { ClearBatchConfirmationView } from "@/components/artwork/ClearBatchConfirmationView";
 import { LargeMasterIntakePanel } from "@/components/artwork/LargeMasterIntakePanel";
 import { NewArtworkBatchForm } from "@/components/artwork/NewArtworkBatchForm";
@@ -53,10 +49,6 @@ import { emptyCleanupResult } from "@/lib/submission/types";
 const formPath = join(
   dirname(fileURLToPath(import.meta.url)),
   "../../components/artwork/NewArtworkBatchForm.tsx",
-);
-const summaryBarPath = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "../../components/artwork/BatchSummaryBar.tsx",
 );
 const applyConfirmPath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -432,7 +424,7 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "Edit screen order is Batch summary, Shared details, then Artworks",
+    name: "Edit screen order is Upload artwork images, Shared details, then Artworks",
     run: () => {
       const appended = appendFilesToBatch(
         createEmptyBatch(),
@@ -446,18 +438,18 @@ const tests: TestCase[] = [
       const countIndex = markup.indexOf(
         `1 of ${MAX_ARTWORKS_PER_BATCH} artworks in this batch`,
       );
-      const summaryIndex = markup.indexOf("Batch summary");
+      const uploadIndex = markup.indexOf("Upload artwork images");
       const sharedIndex = markup.indexOf("Shared details for this batch");
       const artworksIndex = markup.indexOf('id="artworks-heading"');
       assert(headingIndex > -1, "page heading");
       assert(countIndex > headingIndex, "artwork-count line after heading");
-      assert(summaryIndex > countIndex, "Batch summary after count");
-      assert(sharedIndex > summaryIndex, "Shared details after Batch summary");
+      assert(uploadIndex > countIndex, "upload panel after count");
+      assert(sharedIndex > uploadIndex, "Shared details after upload panel");
       assert(artworksIndex > sharedIndex, "Artworks after Shared details");
       assertEqual(
-        markup.split("Batch summary").length - 1,
-        2,
-        "one Batch summary section (label + heading)",
+        markup.split("Upload artwork images").length - 1,
+        1,
+        "one upload panel",
       );
       assertEqual(
         markup.split("Shared details for this batch").length - 1,
@@ -470,11 +462,15 @@ const tests: TestCase[] = [
         ),
         "shared details description",
       );
-      assert(markup.includes("Add More Images"), "add-more stays on summary");
-      assert(markup.includes("Clear Batch…"), "clear stays on summary");
-      assert(markup.includes("Need metadata"), "metadata count stays");
-      assert(markup.includes("Validation errors"), "validation count stays");
-      assert(!markup.includes("Select images"), "initial uploader hidden");
+      assert(markup.includes("Select images"), "uploader stays after selection");
+      assert(markup.includes("Clear Batch…"), "clear stays on the form");
+      const between = markup.slice(uploadIndex, sharedIndex);
+      assert(!between.includes("Batch summary"), "no summary bar between sections");
+      assert(!between.includes("images selected"), "no selection banner");
+      assert(
+        !between.includes("artwork entries created"),
+        "no artwork-created banner",
+      );
       assert(!markup.includes("Choose files"), "no secondary choose-files control");
       assert(
         !markup.includes("details that will apply to all artworks"),
@@ -500,7 +496,7 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "Add more images opens the file input without an intermediate panel",
+    name: "After selection, more images are added from the same upload panel",
     run: () => {
       const appended = appendFilesToBatch(
         createEmptyBatch(),
@@ -510,15 +506,8 @@ const tests: TestCase[] = [
       const markup = renderToStaticMarkup(
         <NewArtworkBatchForm initialBatch={appended.batch} />,
       );
-      assert(markup.includes("Add More Images"), "summary control is present");
-      assert(
-        markup.includes(`id="${BATCH_SUMMARY_ADD_IMAGES_INPUT_ID}"`),
-        "hidden file input is in Batch summary",
-      );
-      assert(
-        markup.includes(`aria-controls="${BATCH_SUMMARY_ADD_IMAGES_INPUT_ID}"`),
-        "button is connected to the hidden file input",
-      );
+      assert(markup.includes("Upload artwork images"), "upload panel remains");
+      assert(markup.includes("Select images"), "select control remains");
       assert(markup.includes('type="file"'), "native file input");
       assert(markup.includes("multiple"), "multiple file selection");
       assert(
@@ -528,41 +517,49 @@ const tests: TestCase[] = [
         "TIFF, JPEG, and PNG remain accepted",
       );
       assert(!markup.includes("Choose files"), "no secondary Choose files button");
+      assert(!markup.includes("Add More Images"), "summary add-more control is gone");
       assert(
         !markup.includes("Add more images"),
         "compact Add more images heading is not rendered",
       );
       assert(
-        !markup.includes("23 more artworks can be added"),
-        "remaining-slot copy from the add-more panel is gone",
+        markup.includes(
+          `${MAX_ARTWORKS_PER_BATCH - 1} more artworks can be added`,
+        ),
+        "remaining batch slots stay in the upload panel",
       );
-      assert(!markup.includes("Select images"), "initial uploader stays hidden");
 
-      const addMoreIndex = markup.indexOf("Add More Images");
+      const uploadIndex = markup.indexOf("Upload artwork images");
       const sharedIndex = markup.indexOf("Shared details for this batch");
-      assert(addMoreIndex > -1, "add-more control exists");
-      assert(sharedIndex > addMoreIndex, "Shared details still follows summary");
+      assert(uploadIndex > -1, "upload panel exists");
+      assert(sharedIndex > uploadIndex, "Shared details follows the upload panel");
       assertEqual(
-        markup.slice(addMoreIndex, sharedIndex).includes("Choose files"),
+        markup.slice(uploadIndex, sharedIndex).includes("Batch summary"),
         false,
-        "no panel between Add more images and Shared details",
+        "no summary bar between upload and Shared details",
       );
 
-      const summarySource = readFileSync(summaryBarPath, "utf8");
-      assert(
-        summarySource.includes("onClick={() => inputRef.current?.click()}"),
-        "one click on Add more images opens the file picker",
+      const uploaderSource = readFileSync(
+        join(
+          dirname(fileURLToPath(import.meta.url)),
+          "../../components/artwork/BatchImageUploader.tsx",
+        ),
+        "utf8",
       );
       assert(
-        summarySource.includes('type="button"'),
-        "Add more images is a button (Enter and Space activate it)",
+        uploaderSource.includes("onClick={() => inputRef.current?.click()}"),
+        "one click on Select images opens the file picker",
       );
       assert(
-        summarySource.includes('event.target.value = ""'),
+        uploaderSource.includes('type="button"'),
+        "Select images is a button (Enter and Space activate it)",
+      );
+      assert(
+        uploaderSource.includes('event.target.value = ""'),
         "hidden input resets after selection",
       );
       assert(
-        summarySource.includes("if (files.length === 0) return"),
+        uploaderSource.includes("if (files.length === 0) return"),
         "canceling the picker makes no changes",
       );
 
@@ -572,10 +569,14 @@ const tests: TestCase[] = [
         !formSource.includes("Choose files"),
         "form does not mount a compact add-more uploader",
       );
+      assert(
+        !formSource.includes("BatchSummaryBar"),
+        "form does not mount the summary bar",
+      );
       assertEqual(
         (formSource.match(/<BatchImageUploader/g) ?? []).length,
         1,
-        "only the empty-state uploader remains",
+        "one upload panel remains after selection",
       );
       assert(
         formSource.includes("onFilesSelected={(files) => ingestFiles(files)}"),
@@ -596,18 +597,15 @@ const tests: TestCase[] = [
       const markup = renderToStaticMarkup(
         <NewArtworkBatchForm initialBatch={appended.batch} />,
       );
-      assert(!markup.includes("Add More Images"), "add-more control is not offered");
-      assert(markup.includes("Batch Full"), "full-batch label is shown");
-      assert(
-        markup.includes(`id="${BATCH_SUMMARY_FULL_DESCRIPTION_ID}"`),
-        "full-batch explanation is labeled for the control",
-      );
+      assert(!markup.includes("Add More Images"), "summary add-more control is gone");
+      assert(!markup.includes("Batch Full"), "summary full-batch label is gone");
       assert(
         markup.includes(
-          `This batch already has the maximum of ${MAX_ARTWORKS_PER_BATCH} artworks.`,
+          `This batch already has the maximum of ${MAX_ARTWORKS_PER_BATCH} artworks`,
         ),
         "explains that the batch is full",
       );
+      assert(markup.includes("Select images"), "uploader remains at capacity");
       assert(markup.includes("disabled"), "control is disabled");
       assert(!markup.includes("Choose files"), "no add-more panel when full");
 
@@ -640,6 +638,12 @@ const tests: TestCase[] = [
       );
       assert(markup.includes('id="artworks-heading"'), "artworks heading");
       assert(markup.includes("One image per artwork."), "instructional text");
+      assert(markup.includes("Tulip Tree"), "card starts with artwork title");
+      assert(
+        !markup.includes("Artwork 01 · Preview"),
+        "cards omit artwork/preview id line",
+      );
+      assert(!markup.includes("Preview inventory"), "no preview inventory copy");
       assertEqual(
         markup.split("Missing / no known title").length - 1,
         2,
@@ -686,12 +690,24 @@ const tests: TestCase[] = [
       );
       assert(cardSource.includes("Missing / no known title"), "checkbox label");
       assert(
+        !cardSource.includes("Artwork {numberLabel} · Preview {previewId}"),
+        "card source has no artwork/preview id line",
+      );
+      assert(
         cardSource.includes("setArtworkUntitled(artwork, event.target.checked)"),
         "checkbox toggles only that artwork",
       );
       assert(
         !cardSource.includes("applyUntitledToSelectedArtworks"),
         "card has no bulk untitled helper",
+      );
+      assert(
+        !cardSource.includes("sm:col-span-5"),
+        "medium does not span nearly the full content row",
+      );
+      assert(
+        cardSource.includes("sm:grid-cols-[minmax(0,45%)_minmax(0,16.67%)]"),
+        "medium is about 45% of the content width with compact height",
       );
     },
   },
@@ -837,7 +853,7 @@ const tests: TestCase[] = [
         "<ApplySharedDetailsConfirmationView",
       );
       const formCloseIndex = formSource.indexOf("</form>");
-      const summaryIndex = formSource.indexOf("<BatchSummaryBar");
+      const uploadIndex = formSource.indexOf("<BatchImageUploader");
       const sharedIndex = formSource.indexOf("<SharedDetailsSection");
       const artworksIndex = formSource.indexOf('aria-labelledby="artworks-heading"');
       assert(applyViewIndex > -1, "apply confirmation is rendered");
@@ -850,11 +866,16 @@ const tests: TestCase[] = [
         applyViewIndex > artworksIndex,
         "modal is not inserted between Shared details and Artworks",
       );
+      assert(uploadIndex > -1, "upload panel is rendered");
       assert(
-        !formSource.slice(summaryIndex, sharedIndex).includes(
+        !formSource.slice(uploadIndex, sharedIndex).includes(
           "ApplySharedDetailsConfirmationView",
         ),
-        "modal is not inserted between Batch summary and Shared details",
+        "modal is not inserted between the upload panel and Shared details",
+      );
+      assert(
+        !formSource.slice(uploadIndex, sharedIndex).includes("BatchSummaryBar"),
+        "summary bar is not inserted between the upload panel and Shared details",
       );
 
       const viewSource = readFileSync(applyConfirmPath, "utf8");

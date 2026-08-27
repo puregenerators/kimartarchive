@@ -332,7 +332,7 @@ const tests: TestCase[] = [
       assert(markup.includes('aria-expanded="true"'), "expanded state");
       const expected = [
         { href: "/", label: "Home" },
-        { href: "/artworks", label: "Artwork Archive" },
+        { href: "/artworks", label: "View Archive" },
         { href: "/new-artwork", label: "Add New Artwork" },
         { href: "/setup/archive", label: "Settings" },
       ];

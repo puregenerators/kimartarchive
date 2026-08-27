@@ -5,7 +5,6 @@ import { ArtworkCard, revokeArtworkImage } from "@/components/artwork/ArtworkCar
 import { BatchImageUploader } from "@/components/artwork/BatchImageUploader";
 import { BatchReview } from "@/components/artwork/BatchReview";
 import { BatchStepHeading } from "@/components/artwork/BatchStepHeading";
-import { BatchSummaryBar } from "@/components/artwork/BatchSummaryBar";
 import { ClearBatchConfirmationView } from "@/components/artwork/ClearBatchConfirmationView";
 import { IncompleteLargeFileResume } from "@/components/artwork/IncompleteLargeFileResume";
 import { ApplySharedDetailsConfirmationView } from "@/components/artwork/ApplySharedDetailsConfirmationView";
@@ -18,11 +17,9 @@ import {
 } from "@/lib/artwork/batch-reset";
 import {
   appendFilesToBatch,
-  artworkNeedsMetadata,
   removeArtworkFromBatch,
   reorderArtworks,
   revokeArtworkDraftImage,
-  totalBatchBytes,
   type AppendFilesRejection,
   type DuplicateMatch,
 } from "@/lib/artwork/batch-files";
@@ -30,7 +27,6 @@ import {
   applySharedDetailsAppliedMessage,
   fillBlankArtworkFieldsFromShared,
   MAX_ARTWORKS_PER_BATCH,
-  formatArtworkNumber,
   populatedSharedApplyFields,
   remainingArtworkSlots,
   requiresLargeFileDropboxIntake,
@@ -277,8 +273,6 @@ export function NewArtworkBatchForm({
 
   const count = batch.artworks.length;
   const remainingSlots = remainingArtworkSlots(count);
-  const needingMetadata = batch.artworks.filter(artworkNeedsMetadata).length;
-  const validationErrorCount = Object.keys(errors.artworks).length;
 
   return (
     <div>
@@ -293,6 +287,9 @@ export function NewArtworkBatchForm({
             {count} of {MAX_ARTWORKS_PER_BATCH} artworks in this batch
           </p>
         ) : null}
+        <p role="status" aria-live="polite" className="sr-only">
+          {uploadNotice ?? ""}
+        </p>
       </header>
 
       {count === 0 ? <IncompleteLargeFileResume /> : null}
@@ -310,17 +307,11 @@ export function NewArtworkBatchForm({
         }}
         noValidate
       >
-        {count === 0 ? (
-          <BatchImageUploader
-            disabled={remainingSlots === 0}
-            remainingSlots={remainingSlots}
-            onFilesSelected={(files) => ingestFiles(files)}
-          />
-        ) : null}
-
-        <p role="status" aria-live="polite" className="sr-only">
-          {uploadNotice ?? ""}
-        </p>
+        <BatchImageUploader
+          disabled={remainingSlots === 0}
+          remainingSlots={remainingSlots}
+          onFilesSelected={(files) => ingestFiles(files)}
+        />
 
         {uploadRejects.length > 0 ? (
           <div
@@ -400,27 +391,16 @@ export function NewArtworkBatchForm({
         {count > 0 ? (
           <>
             <div ref={batchDetailsRef}>
-              <BatchSummaryBar
-                artworkCount={count}
-                maxArtworks={MAX_ARTWORKS_PER_BATCH}
-                totalBytes={totalBatchBytes(batch.artworks)}
-                needingMetadata={needingMetadata}
-                validationErrors={validationErrorCount}
-                canAddMore={remainingSlots > 0}
-                onFilesSelected={(files) => ingestFiles(files)}
-                onRequestClear={requestClearBatch}
+              <SharedDetailsSection
+                shared={batch.shared}
+                onChange={updateShared}
+                canApply={count > 0}
+                onRequestApply={() => {
+                  setApplyNotice(null);
+                  setApplyOpen(true);
+                }}
               />
             </div>
-
-            <SharedDetailsSection
-              shared={batch.shared}
-              onChange={updateShared}
-              canApply={count > 0}
-              onRequestApply={() => {
-                setApplyNotice(null);
-                setApplyOpen(true);
-              }}
-            />
 
             {applyNotice ? (
               <p
@@ -444,9 +424,8 @@ export function NewArtworkBatchForm({
                   Artworks
                 </h2>
                 <p className="mt-1 text-sm text-[var(--muted)]">
-                  One image per artwork. Preview inventory numbers follow current
-                  order ({formatArtworkNumber(0)} → 1000). Enter titles and
-                  dimensions quickly in the compact rows below.
+                  One image per artwork. Enter titles and dimensions quickly in
+                  the compact rows below.
                 </p>
               </div>
 

@@ -10,8 +10,6 @@ import { replaceArtworkImage } from "@/lib/artwork/batch-files";
 import {
   DIMENSION_UNITS,
   MAX_FILE_SIZE_LABEL,
-  formatArtworkNumber,
-  previewInventoryIdForIndex,
   requiresLargeFileDropboxIntake,
   type ArtworkDraft,
   type ArtworkImage,
@@ -113,8 +111,6 @@ export function ArtworkCard({
     ),
   );
 
-  const previewId = previewInventoryIdForIndex(index);
-  const numberLabel = formatArtworkNumber(index);
   const shownImageError = imageError || errors?.image;
 
   function patch<K extends keyof ArtworkDraft>(field: K, value: ArtworkDraft[K]) {
@@ -160,12 +156,9 @@ export function ArtworkCard({
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">
-            Artwork {numberLabel} · Preview {previewId}
-          </p>
           <h3
             id={`artwork-heading-${artwork.id}`}
-            className="mt-0.5 truncate font-display text-lg text-[var(--ink)]"
+            className="truncate font-display text-lg text-[var(--ink)]"
           >
             {resolveArtworkTitle(artwork) || "No title yet"}
           </h3>
@@ -324,7 +317,7 @@ export function ArtworkCard({
               />
             </Field>
           </div>
-          <div className="sm:col-span-5">
+          <div className="grid grid-cols-1 gap-2 sm:col-span-6 sm:grid-cols-[minmax(0,45%)_minmax(0,16.67%)]">
             <MediumField
               id={`${artwork.id}-medium`}
               value={artwork.medium}
@@ -337,8 +330,6 @@ export function ArtworkCard({
               inputClassName={inputClass}
               FieldWrapper={Field}
             />
-          </div>
-          <div className="sm:col-span-1">
             <Field
               id={`${artwork.id}-height`}
               label="Height"

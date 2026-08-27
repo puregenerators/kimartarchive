@@ -17,7 +17,7 @@
     "test:images": "tsx lib/images/images.test.ts",
     "test:preview": "tsx lib/images/preview.test.ts",
     "test:result-ui": "tsx lib/images/result-ui.test.tsx",
-    "test:submission": "tsx lib/submission/submission.test.ts",
+    "test:submission": "tsx lib/submission/submission.test.ts && tsx lib/submission/batch-results.test.ts",
     "test:direct-intake": "tsx lib/submission/direct-intake.test.ts && tsx lib/submission/large-file-intake.test.ts",
     "test:dropbox": "tsx lib/dropbox/dropbox.test.ts",
     "test:storage": "tsx lib/storage/storage.test.ts",

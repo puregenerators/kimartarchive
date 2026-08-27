@@ -7,7 +7,7 @@ export const APP_NAV_ITEMS = [
   { href: "/", label: "Home", match: (path: string) => path === "/" },
   {
     href: "/artworks",
-    label: "Artwork Archive",
+    label: "View Archive",
     match: (path: string) => path === "/artworks" || path.startsWith("/artworks/"),
   },
   {
