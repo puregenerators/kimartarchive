@@ -1,11 +1,15 @@
 "use client";
 
 import type { ArtworkImage } from "@/lib/artwork/types";
+import { requiresLargeFileDropboxIntake } from "@/lib/artwork/types";
+import { describeImageType } from "@/lib/artwork/validation";
 import type { TiffPreviewState } from "@/lib/images/preview-client";
 import {
   buildSourceFileFingerprint,
   isTiffPreviewFresh,
+  LARGE_MASTER_PREVIEW_UNAVAILABLE_MESSAGE,
   resolveTiffPreviewUrl,
+  shouldSkipLargeMasterUiPreview,
 } from "@/lib/images/preview-client";
 
 type ArtworkImageThumbProps = {
@@ -16,9 +20,33 @@ type ArtworkImageThumbProps = {
   emptyLabel?: string;
 };
 
+function FilenameTypePlaceholder({
+  image,
+  note,
+}: {
+  image: ArtworkImage;
+  note: string;
+}) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-1 px-2 text-center">
+      <span
+        className="max-w-full break-all px-0.5 text-[10px] leading-tight text-[var(--ink)]"
+        title={image.file.name}
+      >
+        {image.file.name}
+      </span>
+      <span className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
+        {describeImageType(image.file)}
+      </span>
+      <span className="text-[9px] leading-snug text-[var(--muted)]">{note}</span>
+    </div>
+  );
+}
+
 /**
  * Shared thumbnail for artwork cards and batch review.
  * JPEG/PNG use browser object URLs; TIFF uses temporary server previews.
+ * Oversized masters never use a preview URL — filename/type only.
  */
 export function ArtworkImageThumb({
   image,
@@ -31,6 +59,16 @@ export function ArtworkImageThumb({
       <div className="flex h-full flex-col items-center justify-center gap-1 px-2 text-center">
         <span className="text-xs text-[var(--ink)]">{emptyLabel}</span>
       </div>
+    );
+  }
+
+  const largeMaster = shouldSkipLargeMasterUiPreview(image.file.size);
+  if (largeMaster) {
+    return (
+      <FilenameTypePlaceholder
+        image={image}
+        note="Preview unavailable"
+      />
     );
   }
 
@@ -96,24 +134,14 @@ export function ArtworkImageThumb({
   }
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-1 px-2 text-center">
-      <span
-        className="max-w-full break-all px-0.5 text-[10px] leading-tight text-[var(--ink)]"
-        title={image.file.name}
-      >
-        {image.file.name}
-      </span>
-      <span className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
-        TIFF
-      </span>
-      {isError ? (
-        <span className="text-[9px] leading-snug text-[var(--muted)]">
-          Preview unavailable. Intake can continue.
-        </span>
-      ) : (
-        <span className="text-[10px] text-[var(--muted)]">Preview unavailable</span>
-      )}
-    </div>
+    <FilenameTypePlaceholder
+      image={image}
+      note={
+        isError
+          ? "Preview unavailable. Intake can continue."
+          : "Preview unavailable"
+      }
+    />
   );
 }
 
@@ -124,7 +152,17 @@ export function ArtworkImageThumbFooterNote({
   image: ArtworkImage | null;
   tiffPreview?: TiffPreviewState;
 }) {
-  if (!image?.isTiff) return null;
+  if (!image) return null;
+
+  if (requiresLargeFileDropboxIntake(image.file.size)) {
+    return (
+      <p className="text-[10px] text-[var(--muted)]">
+        {LARGE_MASTER_PREVIEW_UNAVAILABLE_MESSAGE}
+      </p>
+    );
+  }
+
+  if (!image.isTiff) return null;
 
   const fingerprint = buildSourceFileFingerprint({
     imageName: image.file.name,

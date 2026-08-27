@@ -19,11 +19,6 @@ export function resolveArtworkTitle(artwork: {
   return artwork.title.trim();
 }
 
-/** Non-empty title that would be replaced by a batch Untitled apply. */
-export function artworkHasTitleToOverwrite(artwork: ArtworkDraft): boolean {
-  return !isUntitledArtwork(artwork) && artwork.title.trim().length > 0;
-}
-
 /**
  * Mark or unmark an artwork as untitled.
  * The typed/suggested `title` is preserved so unchecking can restore it.
@@ -34,29 +29,4 @@ export function setArtworkUntitled(
 ): ArtworkDraft {
   if (artwork.isUntitled === isUntitled) return artwork;
   return { ...artwork, isUntitled };
-}
-
-export function applyUntitledToSelectedArtworks(
-  artworks: readonly ArtworkDraft[],
-  selectedIds: readonly string[],
-  options?: { overwriteTitled?: boolean },
-): {
-  artworks: ArtworkDraft[];
-  blocked: ArtworkDraft[];
-} {
-  const selected = new Set(selectedIds);
-  const blocked = artworks.filter(
-    (artwork) => selected.has(artwork.id) && artworkHasTitleToOverwrite(artwork),
-  );
-
-  if (blocked.length > 0 && options?.overwriteTitled !== true) {
-    return { artworks: [...artworks], blocked: [...blocked] };
-  }
-
-  return {
-    artworks: artworks.map((artwork) =>
-      selected.has(artwork.id) ? setArtworkUntitled(artwork, true) : artwork,
-    ),
-    blocked: [],
-  };
 }

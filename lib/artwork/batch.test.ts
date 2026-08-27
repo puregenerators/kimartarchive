@@ -6,8 +6,8 @@
 import {
   appendFilesToBatch,
   artworkNeedsMetadata,
-  clearProcessingForArtwork,
   fileIdentityKey,
+  removeArtworkFromBatch,
   removeArtworkFromList,
   reorderArtworks,
   replaceArtworkImage,
@@ -20,9 +20,17 @@ import {
   MAX_FILE_BYTES,
   remainingArtworkSlots,
   APPLYABLE_SHARED_FIELDS,
+  APPLY_SHARED_DETAILS_TITLE,
+  APPLY_SHARED_OVERWRITE_WARNING,
+  applySharedDetailsAppliedMessage,
+  applySharedDetailsBody,
   applySharedDetailsToArtworks,
   createEmptyBatch,
   createArtworkDraft,
+  fillBlankArtworkFieldsFromShared,
+  populatedSharedApplyFields,
+  resolveApplySharedDetails,
+  sharedApplyWouldOverwrite,
   type ArtworkDraft,
   type BatchSharedDetails,
 } from "./types";
@@ -45,7 +53,6 @@ import { ARTWORK_INVENTORY_HEADERS, artworkInventoryColumnIndex } from "@/lib/go
 import { planFilenamesForArtwork } from "./filenames";
 import {
   UNTITLED_TITLE,
-  applyUntitledToSelectedArtworks,
   resolveArtworkTitle,
   setArtworkUntitled,
 } from "./untitled";
@@ -335,6 +342,61 @@ const tests: TestCase[] = [
     },
   },
   {
+    name: "removing one artwork keeps entered batch details",
+    run: () => {
+      const first = appendFilesToBatch(
+        {
+          ...createEmptyBatch(),
+          shared: sharedDefaults({
+            exhibition: "Spring Show",
+            defaultArtworkYear: "2026",
+          }),
+        },
+        [makeFile("One.jpg", { lastModified: 1 }), makeFile("Two.jpg", { lastModified: 2 })],
+        { createPreviewUrls: false },
+      );
+      const removedId = first.batch.artworks[0]!.id;
+      const result = removeArtworkFromBatch(first.batch, removedId);
+      assertEqual(result.returnedToEmpty, false, "batch still active");
+      assertEqual(result.batch.artworks.length, 1, "one remains");
+      assertEqual(result.batch.shared.exhibition, "Spring Show", "exhibition kept");
+      assertEqual(
+        result.batch.shared.defaultArtworkYear,
+        "2026",
+        "year kept",
+      );
+    },
+  },
+  {
+    name: "removing the last artwork returns a clean empty batch",
+    run: () => {
+      const first = appendFilesToBatch(
+        {
+          ...createEmptyBatch(),
+          shared: sharedDefaults({
+            exhibition: "Spring Show",
+            defaultArtworkYear: "2026",
+          }),
+        },
+        [makeFile("Only.jpg")],
+        { createPreviewUrls: false },
+      );
+      const result = removeArtworkFromBatch(
+        first.batch,
+        first.batch.artworks[0]!.id,
+      );
+      assertEqual(result.returnedToEmpty, true, "empty");
+      assertEqual(result.batch.artworks.length, 0, "no drafts");
+      assertEqual(result.batch.shared.exhibition, "", "shared cleared");
+      assertEqual(result.batch.shared.defaultArtworkYear, "", "year cleared");
+      assertEqual(
+        JSON.stringify(result.batch),
+        JSON.stringify(createEmptyBatch()),
+        "same as createEmptyBatch",
+      );
+    },
+  },
+  {
     name: "adding more files does not overwrite existing drafts",
     run: () => {
       const shared = sharedDefaults();
@@ -532,7 +594,7 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "replacing an image invalidates only that artwork's processing result",
+    name: "replacing an image does not change other artworks in the batch",
     run: () => {
       const shared = sharedDefaults();
       const result = appendFilesToBatch(
@@ -545,18 +607,11 @@ const tests: TestCase[] = [
       );
       const a = result.batch.artworks[0]!;
       const b = result.batch.artworks[1]!;
-      const processing = {
-        [a.id]: { status: "success" as const },
-        [b.id]: { status: "success" as const },
-      };
 
       const replaced = replaceArtworkImage(a, makeFile("A2.jpg", { lastModified: 9 }), {
         createPreviewUrl: false,
       });
       assert(replaced.ok, "replace ok");
-      const nextProcessing = clearProcessingForArtwork(processing, a.id);
-      assert(!(a.id in nextProcessing), "a cleared");
-      assertEqual(nextProcessing[b.id]?.status, "success", "b preserved");
       assertEqual(
         replaced.artwork.image?.file.name,
         "A2.jpg",
@@ -591,11 +646,7 @@ const tests: TestCase[] = [
       artwork.year = "2020";
       artwork.medium = "Painting";
 
-      const applied = applySharedDetailsToArtworks(
-        [artwork],
-        shared,
-        ["year", "medium", "exhibition", "gallery", "photographer"],
-      )[0]!;
+      const applied = applySharedDetailsToArtworks([artwork], shared)[0]!;
 
       assertEqual(applied.title, "My Title", "title protected");
       assertEqual(applied.height, "40", "height protected");
@@ -615,18 +666,268 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "selective shared apply can omit fields",
+    name: "typing a batch year fills blank artwork years without touching edited ones",
+    run: () => {
+      const blank = createArtworkDraft(createEmptyBatch().shared);
+      blank.year = "";
+      const edited = createArtworkDraft(createEmptyBatch().shared);
+      edited.year = "2019";
+      const filled = fillBlankArtworkFieldsFromShared(
+        [blank, edited],
+        sharedDefaults({ defaultArtworkYear: "2026" }),
+        "defaultArtworkYear",
+      );
+      assertEqual(filled[0]!.year, "2026", "blank year filled");
+      assertEqual(filled[1]!.year, "2019", "edited year kept");
+    },
+  },
+  {
+    name: "typing a batch medium fills blank artwork mediums without touching edited ones",
+    run: () => {
+      const blank = createArtworkDraft(createEmptyBatch().shared);
+      blank.medium = "";
+      const edited = createArtworkDraft(createEmptyBatch().shared);
+      edited.medium = "Painting";
+      const filled = fillBlankArtworkFieldsFromShared(
+        [blank, edited],
+        sharedDefaults({ defaultMedium: "Monotype" }),
+        "defaultMedium",
+      );
+      assertEqual(filled[0]!.medium, "Monotype", "blank medium filled");
+      assertEqual(filled[1]!.medium, "Painting", "edited medium kept");
+    },
+  },
+  {
+    name: "changing batch dimension unit does not silently overwrite artwork units",
+    run: () => {
+      const artwork = createArtworkDraft(createEmptyBatch().shared);
+      assertEqual(artwork.dimensionUnit, "in", "starts as in");
+      const filled = fillBlankArtworkFieldsFromShared(
+        [artwork],
+        sharedDefaults({ defaultDimensionUnit: "cm" }),
+        "defaultDimensionUnit",
+      );
+      assertEqual(filled[0]!.dimensionUnit, "in", "unit unchanged until Apply");
+    },
+  },
+  {
+    name: "populated batch fields overwrite matching artwork fields",
     run: () => {
       const artwork = createArtworkDraft(sharedDefaults());
       artwork.year = "2019";
       artwork.medium = "Ink";
+      artwork.dimensionUnit = "cm";
+      artwork.overrides.exhibition = "Old Show";
+      artwork.overrides.gallery = "Old Gallery";
+      artwork.overrides.photographer = "Sam";
       const applied = applySharedDetailsToArtworks(
         [artwork],
-        sharedDefaults({ defaultArtworkYear: "2026", defaultMedium: "Painting" }),
-        ["year"],
+        sharedDefaults({
+          defaultArtworkYear: "2026",
+          defaultMedium: "Painting",
+          defaultDimensionUnit: "in",
+          exhibition: "Spring Exhibition",
+          gallery: "Augen Gallery",
+          photographer: "Mario Gallucci",
+        }),
       )[0]!;
-      assertEqual(applied.year, "2026", "year applied");
-      assertEqual(applied.medium, "Ink", "medium untouched");
+      assertEqual(applied.year, "2026", "year overwritten");
+      assertEqual(applied.medium, "Painting", "medium overwritten");
+      assertEqual(applied.dimensionUnit, "in", "unit overwritten");
+      assertEqual(
+        applied.overrides.exhibition,
+        "Spring Exhibition",
+        "exhibition overwritten",
+      );
+      assertEqual(
+        applied.overrides.gallery,
+        "Augen Gallery",
+        "gallery overwritten",
+      );
+      assertEqual(
+        applied.overrides.photographer,
+        "Mario Gallucci",
+        "photographer overwritten",
+      );
+    },
+  },
+  {
+    name: "unrelated artwork fields are preserved when applying batch details",
+    run: () => {
+      const artwork = createArtworkDraft(sharedDefaults());
+      artwork.title = "Kept Title";
+      artwork.height = "12";
+      artwork.width = "9";
+      artwork.depth = "1";
+      artwork.notes = "Private note";
+      artwork.isUntitled = false;
+      const applied = applySharedDetailsToArtworks(
+        [artwork],
+        sharedDefaults({ defaultArtworkYear: "2026", defaultMedium: "Monotype" }),
+      )[0]!;
+      assertEqual(applied.title, "Kept Title", "title preserved");
+      assertEqual(applied.height, "12", "height preserved");
+      assertEqual(applied.width, "9", "width preserved");
+      assertEqual(applied.depth, "1", "depth preserved");
+      assertEqual(applied.notes, "Private note", "notes preserved");
+      assertEqual(applied.isUntitled, false, "untitled flag preserved");
+    },
+  },
+  {
+    name: "individual edits in targeted fields are overwritten only after confirmation",
+    run: () => {
+      const artwork = createArtworkDraft(sharedDefaults());
+      artwork.year = "2019";
+      artwork.medium = "Ink";
+      const shared = sharedDefaults({
+        defaultArtworkYear: "2026",
+        defaultMedium: "Painting",
+      });
+      const list = [artwork];
+      const cancelled = resolveApplySharedDetails(list, shared, "cancel");
+      assertEqual(cancelled[0]!.year, "2019", "cancel keeps year");
+      assertEqual(cancelled[0]!.medium, "Ink", "cancel keeps medium");
+      assertEqual(cancelled, list, "cancel returns the same list");
+      const applied = resolveApplySharedDetails([artwork], shared, "apply")[0]!;
+      assertEqual(applied.year, "2026", "confirm overwrites year");
+      assertEqual(applied.medium, "Painting", "confirm overwrites medium");
+    },
+  },
+  {
+    name: "cancelling apply shared details makes no changes",
+    run: () => {
+      const artwork = createArtworkDraft(sharedDefaults());
+      artwork.year = "1999";
+      artwork.overrides.exhibition = "Recent Monotypes";
+      const before = structuredClone(artwork);
+      const after = resolveApplySharedDetails(
+        [artwork],
+        sharedDefaults({
+          defaultArtworkYear: "2026",
+          exhibition: "Spring Exhibition",
+        }),
+        "cancel",
+      )[0]!;
+      assertEqual(after.year, before.year, "year unchanged");
+      assertEqual(
+        after.overrides.exhibition,
+        before.overrides.exhibition,
+        "exhibition unchanged",
+      );
+      assertEqual(after.medium, before.medium, "medium unchanged");
+    },
+  },
+  {
+    name: "apply summary shows only populated fields and omits placeholders",
+    run: () => {
+      const fields = populatedSharedApplyFields({
+        exhibition: "Spring Exhibition",
+        gallery: "Augen Gallery",
+        exhibitionYear: "2026",
+        defaultArtworkYear: "2026",
+        photographer: "Mario Gallucci",
+        defaultMedium: "Monotype",
+        defaultDimensionUnit: "in",
+      });
+      assertEqual(fields.length, 6, "six apply fields");
+      assertEqual(fields[0]!.label, "Artwork Year", "year label");
+      assertEqual(fields[0]!.value, "2026", "year value");
+      assertEqual(fields[1]!.label, "Medium", "medium label");
+      assertEqual(fields[1]!.value, "Monotype", "medium value");
+      assertEqual(fields[2]!.label, "Dimension Unit", "unit label");
+      assertEqual(fields[2]!.value, "inches", "unit display");
+      assertEqual(fields[3]!.label, "Exhibition", "exhibition label");
+      assertEqual(fields[3]!.value, "Spring Exhibition", "exhibition value");
+      assertEqual(fields[4]!.label, "Gallery / Venue", "gallery label");
+      assertEqual(fields[4]!.value, "Augen Gallery", "gallery value");
+      assertEqual(fields[5]!.label, "Photographer", "photographer label");
+      assertEqual(fields[5]!.value, "Mario Gallucci", "photographer value");
+      assert(
+        fields.every((field) => field.label !== "Exhibition override"),
+        "no override labels",
+      );
+      assert(
+        fields.every((field) => String(field.key) !== "exhibitionYear"),
+        "exhibition year is not an apply field",
+      );
+
+      const sparse = populatedSharedApplyFields({
+        exhibition: "",
+        gallery: "   ",
+        exhibitionYear: "2026",
+        defaultArtworkYear: "",
+        photographer: "",
+        defaultMedium: "",
+        defaultDimensionUnit: "in",
+      });
+      assertEqual(sparse.length, 1, "only stored dimension unit");
+      assertEqual(sparse[0]!.key, "dimensionUnit", "unit only");
+      assert(
+        sparse.every((field) => field.key !== "year"),
+        "empty year is not treated as the 2026 placeholder",
+      );
+    },
+  },
+  {
+    name: "overwrite warning only when a populated field would replace a different value",
+    run: () => {
+      const matching = createArtworkDraft(
+        sharedDefaults({ defaultArtworkYear: "2026" }),
+      );
+      matching.year = "2026";
+      assertEqual(
+        sharedApplyWouldOverwrite([matching], sharedDefaults()),
+        false,
+        "same values do not warn",
+      );
+      const edited = createArtworkDraft(sharedDefaults());
+      edited.year = "2019";
+      assertEqual(
+        sharedApplyWouldOverwrite([edited], sharedDefaults()),
+        true,
+        "different year warns",
+      );
+      const blankYear = createArtworkDraft(sharedDefaults());
+      blankYear.year = "";
+      blankYear.dimensionUnit = "in";
+      const yearOnly = sharedDefaults({
+        defaultArtworkYear: "2026",
+        defaultMedium: "",
+        exhibition: "",
+        gallery: "",
+        photographer: "",
+      });
+      assertEqual(
+        sharedApplyWouldOverwrite([blankYear], yearOnly),
+        false,
+        "filling a blank year is not an overwrite",
+      );
+    },
+  },
+  {
+    name: "apply confirmation copy names the artwork count",
+    run: () => {
+      assertEqual(
+        applySharedDetailsBody(6),
+        "This will replace the existing values in these fields for all 6 artworks in the batch. Blank fields will not make any changes.",
+        "body",
+      );
+      assertEqual(
+        applySharedDetailsAppliedMessage(6),
+        "Details applied to 6 artworks.",
+        "applied",
+      );
+      assertEqual(
+        applySharedDetailsAppliedMessage(1),
+        "Details applied to 1 artwork.",
+        "singular applied",
+      );
+      assertEqual(APPLY_SHARED_DETAILS_TITLE, "Apply these details to all artworks?", "title");
+      assertEqual(
+        APPLY_SHARED_OVERWRITE_WARNING,
+        "Any individual changes already entered in these fields will be replaced.",
+        "warning",
+      );
     },
   },
   {
@@ -709,16 +1010,28 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "individual custom medium remains intact unless Medium is applied",
+    name: "blank batch medium leaves an individual custom medium unchanged",
+    run: () => {
+      const artwork = createArtworkDraft(sharedDefaults());
+      artwork.medium = "Collage";
+      const applied = applySharedDetailsToArtworks(
+        [artwork],
+        sharedDefaults({ defaultMedium: "", defaultArtworkYear: "2026" }),
+      )[0]!;
+      assertEqual(applied.medium, "Collage", "custom medium preserved");
+      assertEqual(applied.year, "2026", "populated year still applied");
+    },
+  },
+  {
+    name: "populated batch medium overwrites an individual custom medium",
     run: () => {
       const artwork = createArtworkDraft(sharedDefaults());
       artwork.medium = "Collage";
       const applied = applySharedDetailsToArtworks(
         [artwork],
         sharedDefaults({ defaultMedium: "Monotype" }),
-        ["year", "dimensionUnit"],
       )[0]!;
-      assertEqual(applied.medium, "Collage", "custom medium preserved");
+      assertEqual(applied.medium, "Monotype", "custom medium overwritten");
     },
   },
   {
@@ -845,7 +1158,7 @@ const tests: TestCase[] = [
     name: "Apply Shared Details has no Location option",
     run: () => {
       assertEqual(
-        APPLYABLE_SHARED_FIELDS.some((f) => f.key === "location"),
+        APPLYABLE_SHARED_FIELDS.some((f) => String(f.key) === "location"),
         false,
         "no location apply key",
       );
@@ -1186,46 +1499,36 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "batch Untitled apply does not overwrite titled works without confirmation",
+    name: "Missing / no known title marks only that artwork and leaves others unchanged",
     run: () => {
-      const blank = createArtworkDraft(sharedDefaults(), { title: "" });
-      const titled = createArtworkDraft(sharedDefaults(), {
-        title: "Blue Garden",
-        titleSuggestedFromFilename: false,
+      const first = createArtworkDraft(sharedDefaults(), {
+        title: "Tulip Tree",
       });
-      const already = setArtworkUntitled(
-        createArtworkDraft(sharedDefaults(), { title: "Kept" }),
-        true,
+      const second = createArtworkDraft(sharedDefaults(), {
+        title: "Blue Garden",
+      });
+
+      const markedFirst = setArtworkUntitled(first, true);
+      assertEqual(markedFirst.isUntitled, true, "first flagged");
+      assertEqual(
+        resolveArtworkTitle(markedFirst),
+        UNTITLED_TITLE,
+        "first Untitled",
+      );
+      assertEqual(markedFirst.title, "Tulip Tree", "first prior title kept");
+      assertEqual(second.isUntitled, false, "second unchanged");
+      assertEqual(second.title, "Blue Garden", "second title intact");
+      assertEqual(
+        resolveArtworkTitle(second),
+        "Blue Garden",
+        "second resolved",
       );
 
-      const blocked = applyUntitledToSelectedArtworks(
-        [blank, titled, already],
-        [blank.id, titled.id, already.id],
-      );
-      assertEqual(blocked.blocked.length, 1, "titled work blocked");
-      assertEqual(blocked.blocked[0]!.id, titled.id, "blocked id");
-      assertEqual(blocked.artworks[0]!.isUntitled, false, "blank not applied");
-      assertEqual(blocked.artworks[1]!.isUntitled, false, "titled not overwritten");
-      assertEqual(blocked.artworks[1]!.title, "Blue Garden", "title intact");
-      assertEqual(blocked.artworks[2]!.isUntitled, true, "already untitled");
-
-      const blankOnly = applyUntitledToSelectedArtworks(
-        [blank, titled],
-        [blank.id],
-      );
-      assertEqual(blankOnly.blocked.length, 0, "blank apply allowed");
-      assertEqual(blankOnly.artworks[0]!.isUntitled, true, "blank marked");
-      assertEqual(blankOnly.artworks[1]!.title, "Blue Garden", "titled untouched");
-      assertEqual(resolveArtworkTitle(blankOnly.artworks[0]!), UNTITLED_TITLE, "resolved");
-
-      const confirmed = applyUntitledToSelectedArtworks(
-        [blank, titled],
-        [titled.id],
-        { overwriteTitled: true },
-      );
-      assertEqual(confirmed.blocked.length, 0, "confirmed");
-      assertEqual(confirmed.artworks[1]!.isUntitled, true, "titled marked after confirm");
-      assertEqual(confirmed.artworks[1]!.title, "Blue Garden", "prior title kept for restore");
+      const restored = setArtworkUntitled(markedFirst, false);
+      assertEqual(restored.isUntitled, false, "first restored");
+      assertEqual(restored.title, "Tulip Tree", "first title restored");
+      assertEqual(second.isUntitled, false, "second still unchanged");
+      assertEqual(second.title, "Blue Garden", "second title still intact");
     },
   },
 ];

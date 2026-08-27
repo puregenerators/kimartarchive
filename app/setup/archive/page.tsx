@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { ArchiveSetupClient } from "@/app/setup/archive/SetupArchiveClient";
 import { requireAuthenticatedPage } from "@/lib/auth/access";
+import { isVercelRuntime } from "@/lib/dropbox/credentials-logic";
 import { runDropboxDiagnostics } from "@/lib/dropbox/health";
 import { buildArchiveOverallStatus } from "@/lib/dropbox/status";
 import { runGoogleDiagnostics } from "@/lib/google/diagnostics";
@@ -85,6 +86,7 @@ export default async function SetupArchivePage({
           dropbox={dropbox}
           flash={flash}
           overall={overall}
+          localProcessingAvailable={!isVercelRuntime()}
         />
       </div>
     </main>

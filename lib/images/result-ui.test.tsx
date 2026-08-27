@@ -7,6 +7,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { ProcessingResultPanel } from "@/components/artwork/ProcessingResultPanel";
+import { LocalImageProcessingTest } from "@/app/setup/archive/LocalImageProcessingTest";
 import type { ArtworkProcessingSuccess } from "@/lib/images/client-types";
 import {
   buildProcessingSummaryItems,
@@ -41,7 +42,6 @@ const MULTI_PAGE_WARNING =
 /** Byte counts chosen so formatted values are stable, hand-checkable strings. */
 const result: ArtworkProcessingSuccess = {
   status: "success",
-  fingerprint: "fp-1",
   resultId: "result-1",
   expiresAt: 0,
   durationMs: 2594,
@@ -115,7 +115,6 @@ function renderPanel(overrides?: Partial<ArtworkProcessingSuccess>): string {
       result={{ ...result, ...overrides }}
       sourcePreviewUrl={null}
       isTiff
-      stale={false}
     />,
   );
 }
@@ -330,6 +329,31 @@ const tests: TestCase[] = [
         markup.includes(">Image processing result</h4>"),
         "heading text is not merged with the dev label",
       );
+    },
+  },
+  {
+    name: "local processing diagnostic lives on Archive setup, not Review Batch copy",
+    run: () => {
+      const available = renderToStaticMarkup(
+        <LocalImageProcessingTest available />,
+      );
+      assert(available.includes("Local image processing"), "setup heading");
+      assert(available.includes("Process image"), "process action");
+      assert(
+        available.includes("not reused by Submit Batch"),
+        "not part of submission",
+      );
+      assert(available.includes("Choose image"), "file picker");
+
+      const blocked = renderToStaticMarkup(
+        <LocalImageProcessingTest available={false} />,
+      );
+      assert(
+        blocked.includes("cannot send source files through production Vercel"),
+        "vercel block copy",
+      );
+      assert(!blocked.includes("Choose image"), "no file picker on Vercel");
+      assert(!blocked.includes("Process image"), "no process action on Vercel");
     },
   },
 ];

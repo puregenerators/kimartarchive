@@ -9,7 +9,7 @@ import {
   requiresLargeFileDropboxIntake,
 } from "@/lib/artwork/types";
 import { isSafePlannedFilename } from "@/lib/images/filename-safety";
-import { DROPBOX_ARCHIVE_ROOT_WEB_URL } from "@/lib/dropbox/types";
+import { DROPBOX_ARCHIVE_ROOT_DISPLAY, DROPBOX_ARCHIVE_ROOT_WEB_URL } from "@/lib/dropbox/types";
 import { buildArtworkFolderName } from "@/lib/submission/claim-logic";
 import { expectedMasterDropboxPath } from "@/lib/submission/upload-link-logic";
 import type {
@@ -37,6 +37,9 @@ export const VERCEL_SAFE_DOWNLOAD_BYTES = 512 * 1024 * 1024;
 
 export const LARGE_FILE_INTAKE_STATUSES = [
   "waiting_for_dropbox",
+  "file_not_found",
+  "incorrect_filename",
+  "unsupported_file",
   "master_found",
   "local_processing_required",
   "processing",
@@ -182,25 +185,358 @@ export function localProcessingRequiredReason(estimate: LargeFileMemoryEstimate)
   return "Local processing is required.";
 }
 
+export const LARGE_FILE_WAITING_INSTRUCTION =
+  "This master is too large to upload directly through the archive. Add it to the prepared Dropbox folder, then return here to finish processing.";
+
+export const LARGE_FILE_FILE_NOT_FOUND_MESSAGE =
+  "We couldn't find the expected file in the prepared folder. Confirm that the upload has finished and the filename matches exactly, then check again.";
+
+export const LARGE_FILE_INCORRECT_FILENAME_MESSAGE =
+  "The file in the prepared folder does not use the expected filename. Rename it to match exactly, then check again.";
+
+export const LARGE_FILE_MASTER_FOUND_MESSAGE = "Master file found";
+
+export const LARGE_FILE_COMPLETED_MESSAGE = "Artwork added to the archive";
+
+const PREVIEW_OR_DECODE_LEAK_PATTERN =
+  /could not be decoded|corrupted or an unsupported variant|preview unavailable/i;
+
+export function isPreviewOrDecodeLeakMessage(message: string): boolean {
+  return PREVIEW_OR_DECODE_LEAK_PATTERN.test(message);
+}
+
+export function largeFileNeedsUploadHeading(count: number): string {
+  return count === 1
+    ? "1 artwork needs a large-file upload"
+    : `${count} artworks need a large-file upload`;
+}
+
+export function dropboxFolderDisplayPath(folderName: string): string {
+  return `${DROPBOX_ARCHIVE_ROOT_DISPLAY}${folderName}`;
+}
+
 export function largeFileStatusLabel(status: LargeFileIntakeStatus): string {
   switch (status) {
     case "waiting_for_dropbox":
       return "Waiting for Dropbox upload";
+    case "file_not_found":
+      return "File not found";
+    case "incorrect_filename":
+      return "Incorrect filename";
+    case "unsupported_file":
+      return "Unsupported file";
     case "master_found":
-      return "Master found";
+      return LARGE_FILE_MASTER_FOUND_MESSAGE;
     case "local_processing_required":
       return "Local processing required";
     case "processing":
       return "Processing";
     case "completed":
-      return "Completed";
+      return LARGE_FILE_COMPLETED_MESSAGE;
     case "failed":
-      return "Failed";
+      return "Processing failed";
   }
+}
+
+export function visibleLargeFileIntakeMessage(
+  status: LargeFileIntakeStatus,
+  message: string,
+): string | null {
+  const trimmed = message.trim();
+  if (status === "waiting_for_dropbox") {
+    if (!trimmed || isPreviewOrDecodeLeakMessage(trimmed)) return null;
+    if (/inventory id reserved/i.test(trimmed)) return null;
+    return trimmed;
+  }
+  if (status === "file_not_found") return LARGE_FILE_FILE_NOT_FOUND_MESSAGE;
+  if (status === "incorrect_filename") {
+    return trimmed || LARGE_FILE_INCORRECT_FILENAME_MESSAGE;
+  }
+  if (status === "master_found") return LARGE_FILE_MASTER_FOUND_MESSAGE;
+  if (status === "completed") return LARGE_FILE_COMPLETED_MESSAGE;
+  if (
+    isPreviewOrDecodeLeakMessage(trimmed) &&
+    status !== "unsupported_file"
+  ) {
+    return null;
+  }
+  return trimmed || null;
+}
+
+export function statusFromLargeFileProcessError(data: {
+  errorCode?: string;
+  status?: LargeFileIntakeStatus;
+}): LargeFileIntakeStatus {
+  if (data.status) return data.status;
+  if (data.errorCode === "LOCAL_PROCESSING_REQUIRED") {
+    return "local_processing_required";
+  }
+  if (data.errorCode === "MISSING_FILE") return "file_not_found";
+  return "failed";
 }
 
 export function canCheckOrProcessClaimStatus(status: string): boolean {
   return status === "Claimed" || status === "Processing";
+}
+
+export function isTerminalClaimStatus(status: string): boolean {
+  return (
+    status === "Completed" || status === "Failed" || status === "Abandoned"
+  );
+}
+
+export type RequiredArchiveFilesPresence = {
+  master: boolean;
+  hr: boolean;
+  web: boolean;
+  thumb: boolean;
+  metadata: boolean;
+};
+
+export type ArchiveCompletenessEvidence = {
+  hasInventorySheetRow: boolean;
+  folderExists: boolean;
+  files: RequiredArchiveFilesPresence;
+};
+
+export type RequiredCompletedArchivePaths = {
+  folderPath: string;
+  masterPath: string;
+  hrPath: string;
+  webPath: string;
+  thumbPath: string;
+  metadataPath: string;
+};
+
+export type IntakeSideEffect =
+  | {
+      kind: "update_claim_status";
+      status: "Completed" | "Abandoned";
+      setCompletedAt: boolean;
+    }
+  | { kind: "delete_pending_intake" };
+
+export type IncompleteIntakeListDecision =
+  | { kind: "list"; sideEffects: [] }
+  | { kind: "hide"; sideEffects: [] }
+  | { kind: "reconcile_completed"; sideEffects: IntakeSideEffect[] };
+
+export function requiredCompletedArchivePaths(
+  pending: PendingLargeFileIntake,
+): RequiredCompletedArchivePaths {
+  const planned = planFilenamesForArtwork({
+    year: pending.artwork.year,
+    inventoryId: pending.inventoryId,
+    title: pending.artwork.title,
+    masterFilename: pending.originalFilename,
+  });
+  return {
+    folderPath: pending.folderPath,
+    masterPath: pending.masterPath,
+    hrPath: `${pending.folderPath}/${planned.hr}`,
+    webPath: `${pending.folderPath}/${planned.web}`,
+    thumbPath: `${pending.folderPath}/${planned.thumb}`,
+    metadataPath: `${pending.folderPath}/${planned.metadata}`,
+  };
+}
+
+export function missingRequiredArchiveFiles(
+  files: RequiredArchiveFilesPresence,
+): boolean {
+  return (
+    !files.master || !files.hr || !files.web || !files.thumb || !files.metadata
+  );
+}
+
+/**
+ * Completed is reserved for a verified final archive record: Inventory Sheet
+ * row, artwork folder, and the required master / HR / web / thumb / metadata
+ * files. Missing any of those is not Completed.
+ */
+export function isGenuinelyCompletedArchive(
+  evidence: ArchiveCompletenessEvidence,
+): boolean {
+  return (
+    evidence.hasInventorySheetRow &&
+    evidence.folderExists &&
+    !missingRequiredArchiveFiles(evidence.files)
+  );
+}
+
+export function emptyArchiveFilePresence(): RequiredArchiveFilesPresence {
+  return {
+    master: false,
+    hr: false,
+    web: false,
+    thumb: false,
+    metadata: false,
+  };
+}
+
+export function decideIncompleteIntakeListing(params: {
+  claimStatus: string;
+  hasPendingIntake: boolean;
+  completeness: ArchiveCompletenessEvidence;
+}): IncompleteIntakeListDecision {
+  if (!canCheckOrProcessClaimStatus(params.claimStatus) || !params.hasPendingIntake) {
+    return { kind: "hide", sideEffects: [] };
+  }
+  if (isGenuinelyCompletedArchive(params.completeness)) {
+    return {
+      kind: "reconcile_completed",
+      sideEffects: [
+        {
+          kind: "update_claim_status",
+          status: "Completed",
+          setCompletedAt: true,
+        },
+        { kind: "delete_pending_intake" },
+      ],
+    };
+  }
+  if (params.completeness.hasInventorySheetRow) {
+    return { kind: "hide", sideEffects: [] };
+  }
+  return { kind: "list", sideEffects: [] };
+}
+
+export const REMOVE_INCOMPLETE_INTAKE_ACTION_LABEL =
+  "Already completed this upload or want to start it over later? Dismiss upload.";
+export const REMOVE_INCOMPLETE_INTAKE_KEEP_LABEL = "Keep intake";
+export const REMOVE_INCOMPLETE_INTAKE_CONFIRM_LABEL = "Remove from list";
+export const REMOVE_INCOMPLETE_INTAKE_CONFIRM_TITLE =
+  "Remove this incomplete intake?";
+
+export function removeIncompleteIntakeConfirmationBody(
+  inventoryId: number,
+): string {
+  return `It will no longer appear here. Inventory ${inventoryId} will remain retired, and no Dropbox files or completed artwork records will be deleted.`;
+}
+
+export type DismissIncompleteIntakeDecision =
+  | {
+      ok: true;
+      claimStatus: ClaimStatus;
+      alreadyTerminal: boolean;
+      sideEffects: IntakeSideEffect[];
+    }
+  | {
+      ok: false;
+      code: "UNAUTHENTICATED" | "INVALID_REQUEST" | "CLAIM_NOT_REUSABLE";
+      message: string;
+    };
+
+/**
+ * Abandon a stale incomplete intake. Preserves the claim and inventory ID,
+ * never marks an incomplete record Completed, and never deletes Dropbox files
+ * or Artwork Inventory rows.
+ */
+export function decideDismissIncompleteIntake(params: {
+  authenticated: boolean;
+  claim: {
+    claimId: string;
+    inventoryId: number;
+    claimStatus: ClaimStatus;
+  } | null;
+  pending: PendingLargeFileIntake | null;
+  requestedClaimId: string;
+  requestedInventoryId: number;
+}): DismissIncompleteIntakeDecision {
+  if (!params.authenticated) {
+    return {
+      ok: false,
+      code: "UNAUTHENTICATED",
+      message: "Authentication required.",
+    };
+  }
+  if (!isSafeClaimId(params.requestedClaimId) || params.requestedInventoryId <= 0) {
+    return {
+      ok: false,
+      code: "INVALID_REQUEST",
+      message: "A valid claim ID and inventory ID are required.",
+    };
+  }
+  if (!params.claim) {
+    return {
+      ok: false,
+      code: "CLAIM_NOT_REUSABLE",
+      message: "Inventory claim was not found.",
+    };
+  }
+  if (
+    params.claim.claimId !== params.requestedClaimId ||
+    params.claim.inventoryId !== params.requestedInventoryId
+  ) {
+    return {
+      ok: false,
+      code: "CLAIM_NOT_REUSABLE",
+      message: "Inventory claim does not match this artwork.",
+    };
+  }
+  if (params.pending) {
+    if (
+      params.pending.claimId !== params.requestedClaimId ||
+      params.pending.inventoryId !== params.requestedInventoryId
+    ) {
+      return {
+        ok: false,
+        code: "INVALID_REQUEST",
+        message: "The reserved intake does not match this claim.",
+      };
+    }
+  }
+  if (params.claim.claimStatus === "Abandoned") {
+    return {
+      ok: true,
+      claimStatus: "Abandoned",
+      alreadyTerminal: true,
+      sideEffects: [],
+    };
+  }
+  if (params.claim.claimStatus === "Completed") {
+    return {
+      ok: true,
+      claimStatus: "Completed",
+      alreadyTerminal: true,
+      sideEffects: [],
+    };
+  }
+  if (params.claim.claimStatus === "Failed") {
+    return {
+      ok: true,
+      claimStatus: "Failed",
+      alreadyTerminal: true,
+      sideEffects: [],
+    };
+  }
+  if (!canCheckOrProcessClaimStatus(params.claim.claimStatus)) {
+    return {
+      ok: false,
+      code: "CLAIM_NOT_REUSABLE",
+      message: "This inventory claim cannot be reused.",
+    };
+  }
+  return {
+    ok: true,
+    claimStatus: "Abandoned",
+    alreadyTerminal: false,
+    sideEffects: [
+      {
+        kind: "update_claim_status",
+        status: "Abandoned",
+        setCompletedAt: false,
+      },
+    ],
+  };
+}
+
+export function dismissPreservesArchiveArtifacts(
+  sideEffects: readonly IntakeSideEffect[],
+): boolean {
+  return sideEffects.every(
+    (effect) =>
+      effect.kind === "update_claim_status" && effect.status === "Abandoned",
+  );
 }
 
 export function masterExtensionAllowed(filename: string): boolean {
@@ -496,6 +832,7 @@ export type IncompleteLargeFileIntake = {
   title: string;
   year: string;
   status: LargeFileIntakeStatus;
+  declaredByteLength: number;
 };
 
 export function inspectDropboxMasterMetadata(params: {
@@ -516,29 +853,29 @@ export function inspectDropboxMasterMetadata(params: {
   if (params.isFolder) {
     return {
       ok: false,
-      status: "failed",
-      message: "The reserved master path points at a folder, not a file.",
+      status: "file_not_found",
+      message: LARGE_FILE_FILE_NOT_FOUND_MESSAGE,
     };
   }
   if (params.name !== params.expectedFilename) {
     return {
       ok: false,
-      status: "failed",
-      message: "The file at the reserved path does not use the expected filename.",
+      status: "incorrect_filename",
+      message: LARGE_FILE_INCORRECT_FILENAME_MESSAGE,
     };
   }
   if (!masterExtensionAllowed(params.name)) {
     return {
       ok: false,
-      status: "failed",
+      status: "unsupported_file",
       message: "Master must be TIFF, JPEG, or PNG.",
     };
   }
   if (params.size <= 0) {
     return {
       ok: false,
-      status: "waiting_for_dropbox",
-      message: "The reserved master path is empty. Finish the Dropbox upload, then check again.",
+      status: "file_not_found",
+      message: LARGE_FILE_FILE_NOT_FOUND_MESSAGE,
     };
   }
   return { ok: true };

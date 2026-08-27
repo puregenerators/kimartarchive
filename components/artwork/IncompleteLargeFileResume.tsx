@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 
 import { LargeMasterIntakePanel } from "@/components/artwork/LargeMasterIntakePanel";
 import { formatFileSize } from "@/lib/artwork/validation";
-import type {
-  IncompleteLargeFileIntake,
-  LargeFileCheckResult,
-  LargeFileIntakeStatus,
+import {
+  statusFromLargeFileProcessError,
+  type IncompleteLargeFileIntake,
+  type LargeFileCheckResult,
+  type LargeFileIntakeStatus,
 } from "@/lib/submission/large-file-intake-logic";
 import type { ArtworkSubmissionResult } from "@/lib/submission/types";
 
@@ -51,9 +52,12 @@ export function IncompleteLargeFileResume() {
         setIntakes(
           data.intakes.map((entry) => ({
             ...entry,
-            message:
-              "This inventory ID is reserved. Upload the expected master through Dropbox, then check.",
+            message: "",
             canContinueProcessing: false,
+            byteLengthLabel:
+              entry.declaredByteLength > 0
+                ? formatFileSize(entry.declaredByteLength)
+                : null,
           })),
         );
       } catch {
@@ -90,7 +94,6 @@ export function IncompleteLargeFileResume() {
             return {
               ...entry,
               checking: false,
-              status: "failed" as LargeFileIntakeStatus,
               message: data.message,
               canContinueProcessing: false,
             };
@@ -103,7 +106,9 @@ export function IncompleteLargeFileResume() {
             folderWebUrl: data.folderWebUrl,
             canContinueProcessing: data.canContinueProcessing,
             byteLengthLabel:
-              data.byteLength != null ? formatFileSize(data.byteLength) : null,
+              data.byteLength != null
+                ? formatFileSize(data.byteLength)
+                : entry.byteLengthLabel,
             dimensionsLabel: dimensionsLabel(data),
           };
         }),
@@ -115,7 +120,6 @@ export function IncompleteLargeFileResume() {
             ? {
                 ...entry,
                 checking: false,
-                status: "failed",
                 message: "Could not check Dropbox for this master.",
                 canContinueProcessing: false,
               }
@@ -141,7 +145,7 @@ export function IncompleteLargeFileResume() {
       });
       const data = (await response.json()) as
         | ArtworkSubmissionResult
-        | { ok: false; errorCode?: string; message: string };
+        | { ok: false; errorCode?: string; message: string; status?: LargeFileIntakeStatus };
       setIntakes((current) =>
         (current ?? []).map((entry) => {
           if (entry.claimId !== claimId) return entry;
@@ -150,16 +154,15 @@ export function IncompleteLargeFileResume() {
               ...entry,
               processing: false,
               status: "completed",
-              message: "Derivatives, metadata, and the inventory row are complete.",
+              message: "Artwork added to the archive",
               canContinueProcessing: false,
             };
           }
-          const local =
-            "errorCode" in data && data.errorCode === "LOCAL_PROCESSING_REQUIRED";
+          const nextStatus = statusFromLargeFileProcessError(data);
           return {
             ...entry,
             processing: false,
-            status: local ? "local_processing_required" : "failed",
+            status: nextStatus,
             message: data.message,
             canContinueProcessing: false,
           };
@@ -182,6 +185,25 @@ export function IncompleteLargeFileResume() {
     }
   }
 
+  async function dismissOne(claimId: string, inventoryId: number) {
+    const response = await fetch("/api/artwork-batches/large-file/dismiss", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ claimId, inventoryId }),
+    });
+    const data = (await response.json()) as
+      | { ok: true }
+      | { ok: false; message?: string };
+    if (!data.ok) {
+      throw new Error(
+        data.message ?? "Could not remove this incomplete intake.",
+      );
+    }
+    setIntakes((current) =>
+      (current ?? []).filter((entry) => entry.claimId !== claimId),
+    );
+  }
+
   if (intakes === null) {
     return null;
   }
@@ -201,11 +223,11 @@ export function IncompleteLargeFileResume() {
           id="resume-large-file-heading"
           className="font-display text-xl text-[var(--ink)]"
         >
-          Resume incomplete large-file intakes
+          Resume incomplete large-file uploads
         </h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          These inventory IDs are already claimed. Checking or continuing does
-          not allocate a new ID.
+          Upload the expected master through Dropbox, then check here. This does
+          not allocate a new inventory ID.
         </p>
       </div>
       {intakes.map((intake) => (
@@ -229,6 +251,7 @@ export function IncompleteLargeFileResume() {
           onContinue={() => {
             void processOne(intake.claimId, intake.inventoryId);
           }}
+          onDismiss={() => dismissOne(intake.claimId, intake.inventoryId)}
         />
       ))}
     </section>

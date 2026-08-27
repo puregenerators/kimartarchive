@@ -65,20 +65,19 @@ export function SharedDetailsSection({
   return (
     <section
       className="border border-[var(--line)] bg-[var(--surface)] p-5 sm:p-6"
-      aria-labelledby="shared-heading"
+      aria-labelledby="batch-details-heading"
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2
-            id="shared-heading"
+            id="batch-details-heading"
             className="font-display text-2xl text-[var(--ink)]"
           >
-            Shared details
+            Shared details for this batch
           </h2>
           <p className="mt-1 max-w-xl text-sm text-[var(--muted)]">
-            Enter once for the exhibition or documentation session. Newly
-            uploaded artworks inherit these defaults when created. Existing
-            artwork edits are not changed until you apply shared details.
+            Add any information that applies to every artwork below. You can
+            still change these details for individual artworks.
           </p>
         </div>
         {canApply ? (
@@ -87,7 +86,7 @@ export function SharedDetailsSection({
             onClick={onRequestApply}
             className="shrink-0 self-start border border-[var(--line)] bg-[var(--surface-elevated)] px-4 py-2 text-xs uppercase tracking-[0.12em] text-[var(--ink)] transition hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
           >
-            Apply shared details to all
+            Apply to all artworks
           </button>
         ) : null}
       </div>
@@ -125,7 +124,7 @@ export function SharedDetailsSection({
             className={inputClass}
           />
         </Field>
-        <Field id="defaultArtworkYear" label="Default Artwork Year">
+        <Field id="defaultArtworkYear" label="Artwork Year">
           <input
             id="defaultArtworkYear"
             name="defaultArtworkYear"
@@ -153,14 +152,14 @@ export function SharedDetailsSection({
             value={shared.defaultMedium}
             onChange={(medium) => onChange("defaultMedium", medium)}
             allowBlank
-            label="Default Medium"
-            customLabel="Specify default medium"
+            label="Medium"
+            customLabel="Specify medium"
             customHint="Examples: Watercolor, Drawing, Mixed media, Sculpture, Collage"
             inputClassName={inputClass}
             FieldWrapper={Field}
           />
         </div>
-        <Field id="defaultDimensionUnit" label="Default Dimension Unit">
+        <Field id="defaultDimensionUnit" label="Dimension Unit">
           <select
             id="defaultDimensionUnit"
             value={shared.defaultDimensionUnit}

@@ -142,9 +142,8 @@ Empty override → use shared value on the final record.
 
 - Newly created artwork drafts from uploaded files **inherit** current shared defaults as normal field values, including the **resolved** default medium (e.g. shared Other + “Watercolor” → artwork `medium` = `Watercolor`).
 - Later edits to shared defaults do **not** silently overwrite artwork values already on cards.
-- Explicit action: **Apply shared details to all artworks** lets the user choose which fields to update (Year, Medium, Dimension Unit, and optionally Exhibition / Gallery / Photographer overrides). When Medium is selected, the resolved shared medium value is applied — artwork-specific medium is left alone unless Medium is explicitly chosen.
+- Explicit action: **Apply to all artworks** copies every **populated** batch field onto every artwork in the current batch after confirmation. Blank batch fields leave existing artwork values unchanged. The confirmation lists only populated fields (Artwork Year, Medium, Dimension Unit, Exhibition, Gallery / Venue, Photographer) and their proposed values — there is no second field-selection step. Exhibition year is batch-level only and is not applied to artwork cards. Title, Height, Width, Depth, Notes, and images are never changed by this action.
 - That action **never** overwrites Title, Height, Width, Depth, Notes, or image.
-- **Apply Untitled to selected artworks** is a separate batch action. It does **not** run automatically and does **not** mark every artwork untitled. The user must select artworks. Works that already have a title are not overwritten unless the user explicitly confirms replacing those titles. The archived title is exactly `Untitled`; the previous typed/suggested title is kept in UI state so unchecking **Missing / no known title** can restore it.
 - Batch review and confirmation display the resolved medium only (never the dropdown label `Other`). Review shows **Title: Untitled** for works marked missing-title — not wording such as “Missing title”. The server resolves the submitted title to exactly `Untitled` when the transient `isUntitled` flag is set. An empty browser title is not treated as untitled.
 
 ### 3.5 Untitled / unknown titles
@@ -153,7 +152,8 @@ Unknown or missing titles may be recorded explicitly as `Untitled`:
 
 - All such artworks share the same canonical title string: `Untitled`.
 - Permanent Inventory IDs provide uniqueness (and appear in filenames and folder names).
-- Blank Title fields are not automatically converted to Untitled. The user must check **Missing / no known title** (or type the literal title `Untitled`).
+- Blank Title fields are not automatically converted to Untitled. The user must check **Missing / no known title** on that artwork (or type the literal title `Untitled`). Checking the box marks only that artwork; other works are unchanged.
+- The archived title is exactly `Untitled`. The previous typed/suggested title is kept in UI state so unchecking **Missing / no known title** can restore it.
 - `isUntitled` is a transient intake/validation flag only. Google Sheets continues to store a single **Title** column.
 
 ### 3.6 Captured archive metadata
@@ -328,7 +328,7 @@ Kim Artwork Archive/          ← archive root folder ID
 
 **Initial master formats:** TIFF, JPEG, PNG.
 
-**Local milestone:** `/api/dev/process-artwork-image` processes one artwork at a time for UI preview/download of temporary derivatives. It does not claim inventory IDs or write to Drive/Sheets.
+**Local diagnostic:** `/api/dev/process-artwork-image` processes one artwork at a time from **Archive setup** (`/setup/archive`) for UI preview/download of temporary derivatives. It does not claim inventory IDs or write to Drive/Sheets. The route is blocked on Vercel. It is not exposed on New Artwork Batch or Review Batch.
 
 **TIFF UI previews:** `POST /api/image-preview` generates temporary JPEG thumbnails for selected TIFF masters so artwork cards and Batch Review can show an image. These thumbnails are temporary UI previews only — not archival outputs — and are discarded on replace/remove/batch reset or TTL expiry. TIFFs that exceed the **4.5 MB** preview-endpoint body limit skip that POST, show a filename/type placeholder, and still allow intake. Preview failure does not block validation or submission.
 
@@ -349,8 +349,9 @@ These are **product** limits, not proof that Vercel can accept or process them i
 
 ### 8.3 Local vs production processing
 
-- **First local implementation:** support local processing / UI review without upload.
-- **Production:** do **not** send large TIFF files through a normal Vercel server action or API request body. Final production upload must use a **direct or staged upload** approach and must be tested with representative TIFF files before deployment.
+- **Intake / Review Batch:** show source previews and planned filenames. Do not run a pre-submission image-processing test; Submit Batch runs the canonical pipeline.
+- **Local diagnostic:** `/setup/archive` may process one file through `/api/dev/process-artwork-image` on a local server only. Results are temporary and are not reused.
+- **Production:** do **not** send large TIFF files through a normal Vercel server action or API request body. Final production upload must use a **direct or staged upload** approach and must be tested with representative TIFF files before deployment. The local diagnostic route is blocked when `VERCEL=1`.
 - Do **not** select Vercel Blob or another temporary storage provider in this spec yet (see §12).
 
 ---

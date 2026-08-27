@@ -1,6 +1,7 @@
 /**
- * Authenticated preview tooling for intake (same shared-password gate as
- * the rest of the app). Not part of the permanent submission pipeline.
+ * Authenticated local-only diagnostic for image processing. Not part of the
+ * permanent submission pipeline. Disabled on Vercel so source bytes cannot
+ * pass through a production function request body.
  */
 
 import { NextResponse } from "next/server";
@@ -8,6 +9,10 @@ import { NextResponse } from "next/server";
 import { unauthorizedApiResponse } from "@/lib/auth/access";
 import { planFilenamesForArtwork } from "@/lib/artwork/filenames";
 import { IMAGE_PROCESSING_CONFIG } from "@/lib/images/config";
+import {
+  LOCAL_DEV_MULTIPART_BLOCKED_MESSAGE,
+  localDevMultipartProcessingAllowed,
+} from "@/lib/images/dev-process-guard";
 import {
   ArtworkImageProcessingError,
   toClientErrorPayload,
@@ -47,6 +52,14 @@ function parseOptionalInt(value: FormDataEntryValue | null): number | null {
 export async function POST(request: Request) {
   const denied = await unauthorizedApiResponse();
   if (denied) return denied;
+
+  if (!localDevMultipartProcessingAllowed()) {
+    return jsonError(
+      403,
+      "MULTIPART_DISABLED",
+      LOCAL_DEV_MULTIPART_BLOCKED_MESSAGE,
+    );
+  }
 
   // DEV TOOLING: not part of the final submission pipeline.
   let artworkId: string | null = null;

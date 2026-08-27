@@ -3,6 +3,8 @@
  * Preview results are never part of submission payloads.
  */
 
+import { requiresLargeFileDropboxIntake } from "@/lib/artwork/types";
+
 /** Vercel serverless request body cap (`4.5 MB`). */
 export const VERCEL_FUNCTION_BODY_LIMIT_BYTES = Math.floor(4.5 * 1024 * 1024);
 
@@ -12,8 +14,22 @@ export const VERCEL_FUNCTION_BODY_LIMIT_BYTES = Math.floor(4.5 * 1024 * 1024);
  */
 export const TIFF_UI_PREVIEW_MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 
+export const LARGE_MASTER_PREVIEW_UNAVAILABLE_MESSAGE =
+  "Preview unavailable for this large master. The original file can still be added through Dropbox.";
+
+export function shouldSkipLargeMasterUiPreview(byteLength: number): boolean {
+  return requiresLargeFileDropboxIntake(byteLength);
+}
+
+export function largeMasterPreviewUnavailableMessage(): string {
+  return LARGE_MASTER_PREVIEW_UNAVAILABLE_MESSAGE;
+}
+
 export function shouldSkipTiffUiPreviewUpload(byteLength: number): boolean {
-  return byteLength > TIFF_UI_PREVIEW_MAX_UPLOAD_BYTES;
+  return (
+    shouldSkipLargeMasterUiPreview(byteLength) ||
+    byteLength > TIFF_UI_PREVIEW_MAX_UPLOAD_BYTES
+  );
 }
 
 export function tiffUiPreviewSkippedMessage(fileName: string): string {

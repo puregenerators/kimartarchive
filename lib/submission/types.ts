@@ -9,6 +9,7 @@ export const CLAIM_STATUSES = [
   "Processing",
   "Completed",
   "Failed",
+  "Abandoned",
 ] as const;
 
 export type ClaimStatus = (typeof CLAIM_STATUSES)[number];

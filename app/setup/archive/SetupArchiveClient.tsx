@@ -10,6 +10,7 @@ import {
 } from "@/app/setup/archive/actions";
 import type { DropboxDiagnostics } from "@/lib/dropbox/types";
 import type { GoogleDiagnostics } from "@/lib/google/diagnostic-types";
+import { LocalImageProcessingTest } from "@/app/setup/archive/LocalImageProcessingTest";
 
 type UploadTestStepKey =
   | "folderCreated"
@@ -58,6 +59,7 @@ type ArchiveSetupClientProps = {
     dropbox: "Connected" | "Not connected";
     archiveFolderReady: boolean;
   };
+  localProcessingAvailable: boolean;
 };
 
 function StatusPill({ ok, label }: { ok: boolean; label: string }) {
@@ -140,6 +142,7 @@ export function ArchiveSetupClient({
   dropbox,
   flash,
   overall,
+  localProcessingAvailable,
 }: ArchiveSetupClientProps) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -553,6 +556,10 @@ export function ArchiveSetupClient({
             folder inside the App Folder. Artwork paths are not modified.
           </p>
         </Card>
+      </div>
+
+      <div className="mt-6">
+        <LocalImageProcessingTest available={localProcessingAvailable} />
       </div>
 
       {overall.ready ? (

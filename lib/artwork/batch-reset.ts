@@ -1,12 +1,9 @@
 import type { AppendFilesRejection, DuplicateMatch } from "@/lib/artwork/batch-files";
 import {
-  DEFAULT_APPLY_SELECTION,
   createEmptyBatch,
-  type ApplyableSharedFieldKey,
   type BatchDraft,
   type BatchValidationResult,
 } from "@/lib/artwork/types";
-import type { ArtworkProcessingState } from "@/lib/images/client-types";
 
 /**
  * Intake batch lives in React memory only. Clearing it must not write or read
@@ -36,16 +33,11 @@ export type BatchIntakeSessionState = {
   mode: "edit" | "review";
   errors: BatchValidationResult;
   applyOpen: boolean;
-  applySelection: ApplyableSharedFieldKey[];
-  untitledOpen: boolean;
-  untitledSelection: string[];
-  untitledOverwriteConfirm: boolean;
+  applyNotice: string | null;
   clearPhase: ClearBatchUiPhase;
-  showAddMore: boolean;
   uploadNotice: string | null;
   uploadRejects: AppendFilesRejection[];
   duplicatePrompt: BatchIntakeDuplicatePrompt | null;
-  processingByArtworkId: Record<string, ArtworkProcessingState>;
 };
 
 /**
@@ -58,16 +50,11 @@ export function createInitialBatchSessionState(): BatchIntakeSessionState {
     mode: "edit",
     errors: { artworks: {} },
     applyOpen: false,
-    applySelection: [...DEFAULT_APPLY_SELECTION],
-    untitledOpen: false,
-    untitledSelection: [],
-    untitledOverwriteConfirm: false,
+    applyNotice: null,
     clearPhase: "idle",
-    showAddMore: false,
     uploadNotice: null,
     uploadRejects: [],
     duplicatePrompt: null,
-    processingByArtworkId: {},
   };
 }
 

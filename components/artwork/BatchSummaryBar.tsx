@@ -1,6 +1,13 @@
 "use client";
 
+import { useRef } from "react";
 import { formatFileSize } from "@/lib/artwork/validation";
+
+const ACCEPT =
+  ".tif,.tiff,.jpg,.jpeg,.png,image/tiff,image/jpeg,image/png";
+
+export const BATCH_SUMMARY_ADD_IMAGES_INPUT_ID = "batch-summary-add-images";
+export const BATCH_SUMMARY_FULL_DESCRIPTION_ID = "batch-summary-full";
 
 type BatchSummaryBarProps = {
   artworkCount: number;
@@ -8,10 +15,8 @@ type BatchSummaryBarProps = {
   totalBytes: number;
   needingMetadata: number;
   validationErrors: number;
-  testedSuccessfully: number;
-  notYetTested: number;
   canAddMore: boolean;
-  onAddMore: () => void;
+  onFilesSelected: (files: File[]) => void;
   onRequestClear: () => void;
 };
 
@@ -32,12 +37,19 @@ export function BatchSummaryBar({
   totalBytes,
   needingMetadata,
   validationErrors,
-  testedSuccessfully,
-  notYetTested,
   canAddMore,
-  onAddMore,
+  onFilesSelected,
   onRequestClear,
 }: BatchSummaryBarProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function takeFiles(list: FileList | File[] | null) {
+    if (!list || !canAddMore) return;
+    const files = Array.from(list);
+    if (files.length === 0) return;
+    onFilesSelected(files);
+  }
+
   return (
     <section
       className="border border-[var(--line)] bg-[var(--surface)] p-4 sm:p-5"
@@ -54,10 +66,28 @@ export function BatchSummaryBar({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <input
+            ref={inputRef}
+            id={BATCH_SUMMARY_ADD_IMAGES_INPUT_ID}
+            type="file"
+            multiple
+            accept={ACCEPT}
+            className="sr-only"
+            tabIndex={-1}
+            disabled={!canAddMore}
+            onChange={(event) => {
+              takeFiles(event.target.files);
+              event.target.value = "";
+            }}
+          />
           <button
             type="button"
-            onClick={onAddMore}
+            onClick={() => inputRef.current?.click()}
             disabled={!canAddMore}
+            aria-controls={BATCH_SUMMARY_ADD_IMAGES_INPUT_ID}
+            aria-describedby={
+              canAddMore ? undefined : BATCH_SUMMARY_FULL_DESCRIPTION_ID
+            }
             title={
               canAddMore
                 ? undefined
@@ -74,6 +104,11 @@ export function BatchSummaryBar({
           >
             Clear Batch…
           </button>
+          {canAddMore ? null : (
+            <p id={BATCH_SUMMARY_FULL_DESCRIPTION_ID} className="sr-only">
+              This batch already has the maximum of {maxArtworks} artworks.
+            </p>
+          )}
         </div>
       </div>
 
@@ -82,8 +117,6 @@ export function BatchSummaryBar({
         <Stat label="Total size" value={formatFileSize(totalBytes)} />
         <Stat label="Need metadata" value={needingMetadata} />
         <Stat label="Validation errors" value={validationErrors} />
-        <Stat label="Tested successfully" value={testedSuccessfully} />
-        <Stat label="Not yet tested" value={notYetTested} />
       </dl>
     </section>
   );

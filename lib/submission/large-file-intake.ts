@@ -10,21 +10,31 @@ import {
   readInventoryClaimRows,
   updateInventoryClaimStatus,
 } from "@/lib/google/sheets";
+import { mapImageProcessingError } from "@/lib/images/errors";
 import { validateArtworkSourceImage } from "@/lib/images/process-artwork-image";
 import { findClaimRowByClaimId } from "@/lib/submission/append-claims";
+import { logSubmissionEvent } from "@/lib/submission/audit-log";
 import { isoNow } from "@/lib/submission/claim-logic";
 import { artworkInventoryHasRow } from "@/lib/submission/inventory-lookup";
 import {
   buildPendingLargeFileIntake,
   bytesPerSampleFromSharpDepth,
+  canCheckOrProcessClaimStatus,
+  decideDismissIncompleteIntake,
+  decideIncompleteIntakeListing,
+  emptyArchiveFilePresence,
   estimateProcessingMemory,
   gateLargeFileClaimAccess,
   inspectDropboxMasterMetadata,
+  LARGE_FILE_FILE_NOT_FOUND_MESSAGE,
   localProcessingRequiredReason,
   parsePendingLargeFileIntake,
   pendingIntakeDropboxPath,
   preferSafeFolderUrl,
+  requiredCompletedArchivePaths,
+  type ArchiveCompletenessEvidence,
   type IncompleteLargeFileIntake,
+  type IntakeSideEffect,
   type LargeFileCheckResult,
   type LargeFileIntakeStatus,
   type PendingLargeFileIntake,
@@ -235,14 +245,13 @@ export async function checkLargeFileMaster(params: {
   if (!meta) {
     return {
       ok: true,
-      status: "waiting_for_dropbox",
+      status: "file_not_found",
       ...base,
       byteLength: null,
       width: null,
       height: null,
       bitDepth: null,
-      message:
-        "The expected master is not in Dropbox yet. Upload it with the exact filename, then check again.",
+      message: LARGE_FILE_FILE_NOT_FOUND_MESSAGE,
       canContinueProcessing: false,
     };
   }
@@ -339,25 +348,107 @@ export async function checkLargeFileMaster(params: {
       canContinueProcessing: true,
     };
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "The Dropbox file exists but could not be read as a supported image.";
+    const mapped = mapImageProcessingError(error);
+    const local =
+      mapped.code === "MEMORY_OR_RESOURCE" || mapped.code === "FILE_TOO_LARGE";
     return {
       ok: true,
-      status: "failed",
+      status: local ? "local_processing_required" : "unsupported_file",
       ...base,
       byteLength: meta.size,
       width: null,
       height: null,
       bitDepth: null,
-      message,
+      message: mapped.message,
       canContinueProcessing: false,
     };
   } finally {
     await unlink(localPath).catch(() => undefined);
     await removeTempDir(tempDir);
   }
+}
+
+async function inspectArchiveCompleteness(
+  pending: PendingLargeFileIntake,
+  hasInventorySheetRow: boolean,
+): Promise<ArchiveCompletenessEvidence> {
+  if (!hasInventorySheetRow) {
+    return {
+      hasInventorySheetRow: false,
+      folderExists: false,
+      files: emptyArchiveFilePresence(),
+    };
+  }
+  const paths = requiredCompletedArchivePaths(pending);
+  const ops = await getDropboxFilesOps();
+  const folderExists = await ops.pathExists(paths.folderPath);
+  if (!folderExists) {
+    return {
+      hasInventorySheetRow: true,
+      folderExists: false,
+      files: emptyArchiveFilePresence(),
+    };
+  }
+  const [master, hr, web, thumb, metadata] = await Promise.all([
+    ops.pathExists(paths.masterPath),
+    ops.pathExists(paths.hrPath),
+    ops.pathExists(paths.webPath),
+    ops.pathExists(paths.thumbPath),
+    ops.pathExists(paths.metadataPath),
+  ]);
+  return {
+    hasInventorySheetRow: true,
+    folderExists: true,
+    files: { master, hr, web, thumb, metadata },
+  };
+}
+
+async function applyIntakeSideEffects(params: {
+  claimId: string;
+  inventoryId: number;
+  clientArtworkId?: string;
+  submissionAttemptId?: string;
+  spreadsheetId: string;
+  sideEffects: readonly IntakeSideEffect[];
+  event: string;
+  detail: string;
+}): Promise<{ ok: true } | { ok: false; reason: string }> {
+  for (const effect of params.sideEffects) {
+    if (effect.kind === "update_claim_status") {
+      const result = await updateInventoryClaimStatus({
+        claimId: params.claimId,
+        status: effect.status,
+        completedAt: effect.setCompletedAt ? isoNow() : "",
+        spreadsheetId: params.spreadsheetId,
+      });
+      if (!result.updated) {
+        logSubmissionEvent({
+          event: `${params.event}_claim_update_failed`,
+          submissionAttemptId: params.submissionAttemptId ?? "",
+          clientArtworkId: params.clientArtworkId,
+          inventoryId: params.inventoryId,
+          claimId: params.claimId,
+          outcome: "failed",
+          detail: result.reason,
+        });
+        return { ok: false, reason: result.reason };
+      }
+      continue;
+    }
+    if (effect.kind === "delete_pending_intake") {
+      await deletePendingLargeFileIntake(params.claimId);
+    }
+  }
+  logSubmissionEvent({
+    event: params.event,
+    submissionAttemptId: params.submissionAttemptId ?? "",
+    clientArtworkId: params.clientArtworkId,
+    inventoryId: params.inventoryId,
+    claimId: params.claimId,
+    outcome: "ok",
+    detail: params.detail,
+  });
+  return { ok: true };
 }
 
 export async function listIncompleteLargeFileIntakes(params: {
@@ -391,10 +482,54 @@ export async function listIncompleteLargeFileIntakes(params: {
   for (const row of rows) {
     const status = String(row[2] ?? "").trim();
     const claimId = String(row[0] ?? "").trim();
-    if (status !== "Claimed" && status !== "Processing") continue;
+    if (!canCheckOrProcessClaimStatus(status)) continue;
     const pending = await readPendingLargeFileIntake(claimId);
     if (!pending) continue;
-    if (artworkInventoryHasRow(table.rows, pending.inventoryId)) continue;
+    const hasInventorySheetRow = artworkInventoryHasRow(
+      table.rows,
+      pending.inventoryId,
+    );
+    let completeness: ArchiveCompletenessEvidence = {
+      hasInventorySheetRow,
+      folderExists: false,
+      files: emptyArchiveFilePresence(),
+    };
+    try {
+      completeness = await inspectArchiveCompleteness(
+        pending,
+        hasInventorySheetRow,
+      );
+    } catch (error) {
+      logSubmissionEvent({
+        event: "large_file_intake_completeness_check_failed",
+        submissionAttemptId: pending.submissionAttemptId,
+        clientArtworkId: pending.clientArtworkId,
+        inventoryId: pending.inventoryId,
+        claimId: pending.claimId,
+        outcome: "failed",
+        detail: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+    const decision = decideIncompleteIntakeListing({
+      claimStatus: status,
+      hasPendingIntake: true,
+      completeness,
+    });
+    if (decision.kind === "reconcile_completed") {
+      await applyIntakeSideEffects({
+        claimId: pending.claimId,
+        inventoryId: pending.inventoryId,
+        clientArtworkId: pending.clientArtworkId,
+        submissionAttemptId: pending.submissionAttemptId,
+        spreadsheetId: preflight.archive.sheetId,
+        sideEffects: decision.sideEffects,
+        event: "large_file_intake_reconciled_completed",
+        detail:
+          "Verified Artwork Inventory row, archive folder, and required files. Claim marked Completed; artwork was not recreated.",
+      });
+      continue;
+    }
+    if (decision.kind === "hide") continue;
     const folderWebUrl = preferSafeFolderUrl({
       folderName: pending.folderName,
     });
@@ -408,17 +543,163 @@ export async function listIncompleteLargeFileIntakes(params: {
       title: pending.artwork.title,
       year: pending.artwork.year,
       status: "waiting_for_dropbox",
+      declaredByteLength: pending.declaredByteLength,
     });
   }
 
   return { ok: true, intakes };
 }
 
+export async function dismissIncompleteLargeFileIntake(params: {
+  authenticated: boolean;
+  claimId: string;
+  inventoryId: number;
+}): Promise<
+  | { ok: true; claimStatus: ClaimStatus; alreadyTerminal: boolean }
+  | { ok: false; status: number; code: string; message: string }
+> {
+  if (!params.authenticated) {
+    return {
+      ok: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "Authentication required.",
+    };
+  }
+
+  const preflight = await runSubmissionPreflight();
+  if (!preflight.ok) {
+    return {
+      ok: false,
+      status: 503,
+      code: "PREFLIGHT_FAILED",
+      message: preflight.message,
+    };
+  }
+
+  const rows = await readInventoryClaimRows(preflight.archive.sheetId);
+  const row = findClaimRowByClaimId(rows, params.claimId);
+  const pending = await readPendingLargeFileIntake(params.claimId);
+  const decision = decideDismissIncompleteIntake({
+    authenticated: true,
+    claim: row ? claimFromRow(row) : null,
+    pending,
+    requestedClaimId: params.claimId,
+    requestedInventoryId: params.inventoryId,
+  });
+  if (!decision.ok) {
+    return {
+      ok: false,
+      status: decision.code === "UNAUTHENTICATED" ? 401 : 400,
+      code: decision.code,
+      message: decision.message,
+    };
+  }
+
+  if (!decision.alreadyTerminal && pending && row) {
+    const table = await readArtworkInventoryTable(preflight.archive.sheetId);
+    const hasInventorySheetRow = artworkInventoryHasRow(
+      table.rows,
+      pending.inventoryId,
+    );
+    let completeness: ArchiveCompletenessEvidence = {
+      hasInventorySheetRow,
+      folderExists: false,
+      files: emptyArchiveFilePresence(),
+    };
+    try {
+      completeness = await inspectArchiveCompleteness(
+        pending,
+        hasInventorySheetRow,
+      );
+    } catch (error) {
+      logSubmissionEvent({
+        event: "large_file_intake_completeness_check_failed",
+        submissionAttemptId: pending.submissionAttemptId,
+        clientArtworkId: pending.clientArtworkId,
+        inventoryId: pending.inventoryId,
+        claimId: pending.claimId,
+        outcome: "failed",
+        detail: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+    const listing = decideIncompleteIntakeListing({
+      claimStatus: row.status,
+      hasPendingIntake: true,
+      completeness,
+    });
+    if (listing.kind === "reconcile_completed") {
+      const applied = await applyIntakeSideEffects({
+        claimId: pending.claimId,
+        inventoryId: pending.inventoryId,
+        clientArtworkId: pending.clientArtworkId,
+        submissionAttemptId: pending.submissionAttemptId,
+        spreadsheetId: preflight.archive.sheetId,
+        sideEffects: listing.sideEffects,
+        event: "large_file_intake_reconciled_completed",
+        detail:
+          "Dismiss requested, but the archive record was complete. Claim marked Completed; artwork was not recreated.",
+      });
+      if (!applied.ok) {
+        return {
+          ok: false,
+          status: 500,
+          code: "CLAIM_UPDATE_FAILED",
+          message: "Could not update this inventory claim. Try again.",
+        };
+      }
+      return {
+        ok: true,
+        claimStatus: "Completed",
+        alreadyTerminal: false,
+      };
+    }
+  }
+
+  if (decision.sideEffects.length > 0) {
+    const applied = await applyIntakeSideEffects({
+      claimId: params.claimId,
+      inventoryId: params.inventoryId,
+      clientArtworkId: pending?.clientArtworkId,
+      submissionAttemptId: pending?.submissionAttemptId,
+      spreadsheetId: preflight.archive.sheetId,
+      sideEffects: decision.sideEffects,
+      event: "large_file_intake_abandoned",
+      detail:
+        "Incomplete intake dismissed. Inventory ID remains retired. Dropbox files and Artwork Inventory rows were not changed.",
+    });
+    if (!applied.ok) {
+      return {
+        ok: false,
+        status: 500,
+        code: "CLAIM_UPDATE_FAILED",
+        message: "Could not update this inventory claim. Try again.",
+      };
+    }
+  } else {
+    logSubmissionEvent({
+      event: "large_file_intake_abandoned",
+      submissionAttemptId: pending?.submissionAttemptId ?? "",
+      clientArtworkId: pending?.clientArtworkId,
+      inventoryId: params.inventoryId,
+      claimId: params.claimId,
+      outcome: "ok",
+      detail: `Idempotent dismiss; claim already ${decision.claimStatus}.`,
+    });
+  }
+
+  return {
+    ok: true,
+    claimStatus: decision.claimStatus,
+    alreadyTerminal: decision.alreadyTerminal,
+  };
+}
+
 export async function processLargeFileIntake(params: {
   authenticated: boolean;
   claimId: string;
   inventoryId: number;
-}): Promise<ArtworkSubmissionResult | { ok: false; errorCode: string; message: string }> {
+}): Promise<ArtworkSubmissionResult | { ok: false; errorCode: string; message: string; status?: LargeFileIntakeStatus }> {
   if (!params.authenticated) {
     return {
       ok: false,
@@ -468,13 +749,18 @@ export async function processLargeFileIntake(params: {
     return {
       ok: false,
       errorCode: "LOCAL_PROCESSING_REQUIRED",
+      status: checked.status,
       message: checked.message,
     };
   }
   if (checked.status !== "master_found" || !checked.canContinueProcessing) {
+    const missing =
+      checked.status === "waiting_for_dropbox" ||
+      checked.status === "file_not_found";
     return {
       ok: false,
-      errorCode: checked.status === "waiting_for_dropbox" ? "MISSING_FILE" : "INVALID_BATCH",
+      errorCode: missing ? "MISSING_FILE" : "INVALID_BATCH",
+      status: checked.status,
       message: checked.message,
     };
   }

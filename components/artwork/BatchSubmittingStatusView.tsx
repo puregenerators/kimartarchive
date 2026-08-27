@@ -1,5 +1,3 @@
-import type { ReactNode } from "react";
-
 export type IntakeProgressItem = {
   title: string;
   stage: string;
@@ -32,12 +30,10 @@ export function BatchSubmittingStatusView({
   artworkCount,
   elapsedSec,
   items,
-  children,
 }: {
   artworkCount: number;
   elapsedSec: number;
   items?: IntakeProgressItem[];
-  children?: ReactNode;
 }) {
   return (
     <div
@@ -50,9 +46,9 @@ export function BatchSubmittingStatusView({
         {artworkCount === 1 ? "" : "s"}
       </p>
       <p className="mt-2 text-[var(--muted)]">
-        Masters upload directly to Dropbox (up to 150 MB each). Larger masters
-        wait for a Dropbox desktop or dropbox.com upload. This may take
-        several minutes. Do not close this page.
+        Files up to 150 MB will upload automatically. For larger files, we’ll
+        prepare a Dropbox folder and show you where to upload them. Processing
+        may take several minutes, so keep this page open until it’s complete.
       </p>
       <SubmittingStatusDots artworkCount={artworkCount} />
       <p className="mt-3 text-xs text-[var(--muted)]">
@@ -90,7 +86,6 @@ export function BatchSubmittingStatusView({
           ))}
         </ul>
       ) : null}
-      {children}
     </div>
   );
 }

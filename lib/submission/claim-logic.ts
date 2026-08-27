@@ -12,8 +12,8 @@ export const FIRST_INVENTORY_ID = 1000;
 
 /**
  * Derive the next inventory ID from every existing claim Inventory ID,
- * regardless of Claimed / Processing / Completed / Failed status.
- * Failed submissions leave permanent gaps; IDs are never reused.
+ * regardless of Claimed / Processing / Completed / Failed / Abandoned status.
+ * Failed and Abandoned submissions leave permanent gaps; IDs are never reused.
  */
 export function nextInventoryIdFromExisting(
   existingInventoryIds: readonly number[],

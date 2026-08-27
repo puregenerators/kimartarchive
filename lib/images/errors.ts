@@ -73,6 +73,18 @@ export function mapImageProcessingError(error: unknown): ArtworkImageProcessingE
     );
   }
 
+  if (
+    includesAny(lower, [
+      "unsupported image format",
+      "input buffer contains unsupported",
+    ])
+  ) {
+    return new ArtworkImageProcessingError(
+      "UNSUPPORTED_FORMAT",
+      "This file is not a readable TIFF, JPEG, or PNG. Photoshop documents and other variants are not supported, even with a .tif filename.",
+    );
+  }
+
   if (includesAny(lower, ["tiff", "tif"]) && includesAny(lower, ["invalid", "malformed", "corrupt"])) {
     return new ArtworkImageProcessingError(
       "MALFORMED_TIFF",
@@ -82,8 +94,6 @@ export function mapImageProcessingError(error: unknown): ArtworkImageProcessingE
 
   if (
     includesAny(lower, [
-      "unsupported image format",
-      "input buffer contains unsupported",
       "vips load",
       "is not a valid",
       "corrupt",

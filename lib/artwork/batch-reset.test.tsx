@@ -3,12 +3,22 @@
  * Run: npx tsx lib/artwork/batch-reset.test.tsx
  */
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { ApplySharedDetailsConfirmationView } from "@/components/artwork/ApplySharedDetailsConfirmationView";
 import { BatchSubmissionReport } from "@/components/artwork/BatchSubmissionReport";
-import { BatchSummaryBar } from "@/components/artwork/BatchSummaryBar";
+import {
+  BATCH_SUMMARY_ADD_IMAGES_INPUT_ID,
+  BATCH_SUMMARY_FULL_DESCRIPTION_ID,
+  BatchSummaryBar,
+} from "@/components/artwork/BatchSummaryBar";
 import { ClearBatchConfirmationView } from "@/components/artwork/ClearBatchConfirmationView";
+import { LargeMasterIntakePanel } from "@/components/artwork/LargeMasterIntakePanel";
 import { NewArtworkBatchForm } from "@/components/artwork/NewArtworkBatchForm";
+import { SharedDetailsSection } from "@/components/artwork/SharedDetailsSection";
 import { appendFilesToBatch } from "@/lib/artwork/batch-files";
 import {
   BATCH_SESSION_STORAGE_KEY,
@@ -22,12 +32,36 @@ import {
   type BatchIntakeSessionState,
 } from "@/lib/artwork/batch-reset";
 import {
-  DEFAULT_APPLY_SELECTION,
+  focusWithoutScrolling,
+  isModalDismissKey,
+  lockBackgroundScroll,
+  MODAL_FOCUS_OPTIONS,
+  trapTabKey,
+} from "@/lib/artwork/modal-focus";
+import {
+  APPLY_SHARED_DETAILS_TITLE,
+  APPLY_SHARED_OVERWRITE_WARNING,
+  applySharedDetailsAppliedMessage,
+  applySharedDetailsBody,
   EMPTY_SHARED_DETAILS,
   MAX_ARTWORKS_PER_BATCH,
   createEmptyBatch,
+  populatedSharedApplyFields,
 } from "@/lib/artwork/types";
 import { emptyCleanupResult } from "@/lib/submission/types";
+
+const formPath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../components/artwork/NewArtworkBatchForm.tsx",
+);
+const summaryBarPath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../components/artwork/BatchSummaryBar.tsx",
+);
+const applyConfirmPath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../components/artwork/ApplySharedDetailsConfirmationView.tsx",
+);
 
 type TestCase = { name: string; run: () => void };
 
@@ -84,12 +118,8 @@ function populatedSession(): BatchIntakeSessionState {
       },
     },
     applyOpen: true,
-    applySelection: ["year"],
-    untitledOpen: true,
-    untitledSelection: [appended.added[0]!.id],
-    untitledOverwriteConfirm: true,
+    applyNotice: null,
     clearPhase: "idle",
-    showAddMore: true,
     uploadNotice: "2 images selected",
     uploadRejects: [
       { code: "batch_count", message: "Too many files for this batch." },
@@ -103,9 +133,6 @@ function populatedSession(): BatchIntakeSessionState {
         },
       ],
       pending: [makeFile("Tulip-Tree.jpg")],
-    },
-    processingByArtworkId: {
-      [appended.added[0]!.id]: { status: "idle" },
     },
   };
 }
@@ -121,10 +148,8 @@ const tests: TestCase[] = [
           totalBytes={64}
           needingMetadata={1}
           validationErrors={0}
-          testedSuccessfully={0}
-          notYetTested={2}
           canAddMore
-          onAddMore={() => undefined}
+          onFilesSelected={() => undefined}
           onRequestClear={() => undefined}
         />,
       );
@@ -137,7 +162,27 @@ const tests: TestCase[] = [
       const markup = renderToStaticMarkup(<NewArtworkBatchForm />);
       assert(markup.includes("Add New Artwork"), "empty heading");
       assert(markup.includes("Select images"), "uploader shown");
-      assert(markup.includes("Shared details"), "shared fields shown");
+      assert(
+        markup.includes("Use the best-quality file you have first"),
+        "quality-first upload guidance",
+      );
+      assert(
+        markup.includes("the largest TIFF is preferred"),
+        "largest TIFF preferred",
+      );
+      assert(
+        !markup.includes("You can upload one image or a batch."),
+        "no empty-state upload instruction",
+      );
+      assert(
+        !markup.includes("Shared details for this batch"),
+        "shared details hidden before selection",
+      );
+      assert(
+        !markup.includes("details that will apply to all artworks"),
+        "no pre-selection shared instruction",
+      );
+      assert(!markup.includes("id=\"exhibition\""), "no exhibition field");
       assert(!markup.includes("Clear Batch"), "no clear control yet");
       assert(!markup.includes("Batch summary"), "no summary yet");
       assert(!markup.includes("id=\"artworks-heading\""), "no artwork list");
@@ -178,11 +223,6 @@ const tests: TestCase[] = [
       assertEqual(cancelled.errors, session.errors, "same errors");
       assertEqual(cancelled.mode, "review", "still in review");
       assertEqual(cancelled.uploadNotice, session.uploadNotice, "notice kept");
-      assertEqual(
-        cancelled.processingByArtworkId,
-        session.processingByArtworkId,
-        "processing kept",
-      );
       assertEqual(cancelled.duplicatePrompt, session.duplicatePrompt, "dupes kept");
       assertEqual(session.batch.artworks.length, 2, "original still populated");
     },
@@ -231,7 +271,7 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "Confirm clears validation, review, and processing state",
+    name: "Confirm clears validation and review state",
     run: () => {
       const session = populatedSession();
       const cleared = applyClearBatchEvent(
@@ -241,16 +281,19 @@ const tests: TestCase[] = [
       assertEqual(cleared.mode, "edit", "back to edit");
       assertEqual(cleared.errors.form, undefined, "no form error");
       assertDeepEqual(cleared.errors.artworks, {}, "no artwork errors");
-      assertDeepEqual(cleared.processingByArtworkId, {}, "no processing");
       assertEqual(cleared.applyOpen, false, "apply closed");
-      assertDeepEqual(
-        cleared.applySelection,
-        [...DEFAULT_APPLY_SELECTION],
-        "apply selection restored",
+      assertEqual(cleared.applyNotice, null, "apply notice cleared");
+      assertEqual("untitledOpen" in cleared, false, "no bulk untitled dialog");
+      assertEqual(
+        "untitledSelection" in cleared,
+        false,
+        "no bulk untitled selection",
       );
-      assertEqual(cleared.untitledOpen, false, "untitled closed");
-      assertEqual(cleared.untitledSelection.length, 0, "untitled selection");
-      assertEqual(cleared.showAddMore, false, "add-more closed");
+      assertEqual(
+        "untitledOverwriteConfirm" in cleared,
+        false,
+        "no bulk untitled overwrite",
+      );
       assertEqual(cleared.uploadNotice, null, "notice cleared");
       assertEqual(cleared.uploadRejects.length, 0, "rejects cleared");
       assertEqual(cleared.duplicatePrompt, null, "dupes cleared");
@@ -280,6 +323,10 @@ const tests: TestCase[] = [
       const markup = renderToStaticMarkup(<NewArtworkBatchForm />);
       assert(markup.includes("Add New Artwork"), "empty heading");
       assert(markup.includes("Select images"), "fresh uploader");
+      assert(
+        !markup.includes("Shared details for this batch"),
+        "shared details hidden",
+      );
       assert(!markup.includes("Clear Batch"), "clear hidden when empty");
       assert(!markup.includes(CLEAR_BATCH_CONFIRMATION_TITLE), "no leftover dialog");
     },
@@ -382,6 +429,628 @@ const tests: TestCase[] = [
       const skipped = applyClearBatchEvent(session, "confirm");
       assertEqual(skipped, session, "same session");
       assertEqual(skipped.batch.artworks.length, 2, "drafts remain");
+    },
+  },
+  {
+    name: "Edit screen order is Batch summary, Shared details, then Artworks",
+    run: () => {
+      const appended = appendFilesToBatch(
+        createEmptyBatch(),
+        [makeFile("Tulip-Tree.jpg")],
+        { allowDuplicates: true, createPreviewUrls: false },
+      );
+      const markup = renderToStaticMarkup(
+        <NewArtworkBatchForm initialBatch={appended.batch} />,
+      );
+      const headingIndex = markup.indexOf("Add New Artwork");
+      const countIndex = markup.indexOf(
+        `1 of ${MAX_ARTWORKS_PER_BATCH} artworks in this batch`,
+      );
+      const summaryIndex = markup.indexOf("Batch summary");
+      const sharedIndex = markup.indexOf("Shared details for this batch");
+      const artworksIndex = markup.indexOf('id="artworks-heading"');
+      assert(headingIndex > -1, "page heading");
+      assert(countIndex > headingIndex, "artwork-count line after heading");
+      assert(summaryIndex > countIndex, "Batch summary after count");
+      assert(sharedIndex > summaryIndex, "Shared details after Batch summary");
+      assert(artworksIndex > sharedIndex, "Artworks after Shared details");
+      assertEqual(
+        markup.split("Batch summary").length - 1,
+        2,
+        "one Batch summary section (label + heading)",
+      );
+      assertEqual(
+        markup.split("Shared details for this batch").length - 1,
+        1,
+        "Shared details is not duplicated",
+      );
+      assert(
+        markup.includes(
+          "Add any information that applies to every artwork below. You can still change these details for individual artworks.",
+        ),
+        "shared details description",
+      );
+      assert(markup.includes("Add More Images"), "add-more stays on summary");
+      assert(markup.includes("Clear Batch…"), "clear stays on summary");
+      assert(markup.includes("Need metadata"), "metadata count stays");
+      assert(markup.includes("Validation errors"), "validation count stays");
+      assert(!markup.includes("Select images"), "initial uploader hidden");
+      assert(!markup.includes("Choose files"), "no secondary choose-files control");
+      assert(
+        !markup.includes("details that will apply to all artworks"),
+        "no pre-selection instruction",
+      );
+      assert(
+        !markup.includes("images selected"),
+        "no persistent file-selection banner",
+      );
+      assert(
+        !markup.includes("artwork entries created"),
+        "no persistent artwork-created banner",
+      );
+      assert(
+        markup.includes('aria-live="polite"') && markup.includes("sr-only"),
+        "file-selection success remains an aria-live announcement",
+      );
+      assert(markup.includes("Missing / no known title"), "per-artwork untitled");
+      assert(
+        !markup.includes("Apply Untitled to selected artworks"),
+        "no bulk untitled button",
+      );
+    },
+  },
+  {
+    name: "Add more images opens the file input without an intermediate panel",
+    run: () => {
+      const appended = appendFilesToBatch(
+        createEmptyBatch(),
+        [makeFile("Tulip-Tree.jpg")],
+        { allowDuplicates: true, createPreviewUrls: false },
+      );
+      const markup = renderToStaticMarkup(
+        <NewArtworkBatchForm initialBatch={appended.batch} />,
+      );
+      assert(markup.includes("Add More Images"), "summary control is present");
+      assert(
+        markup.includes(`id="${BATCH_SUMMARY_ADD_IMAGES_INPUT_ID}"`),
+        "hidden file input is in Batch summary",
+      );
+      assert(
+        markup.includes(`aria-controls="${BATCH_SUMMARY_ADD_IMAGES_INPUT_ID}"`),
+        "button is connected to the hidden file input",
+      );
+      assert(markup.includes('type="file"'), "native file input");
+      assert(markup.includes("multiple"), "multiple file selection");
+      assert(
+        markup.includes(
+          ".tif,.tiff,.jpg,.jpeg,.png,image/tiff,image/jpeg,image/png",
+        ),
+        "TIFF, JPEG, and PNG remain accepted",
+      );
+      assert(!markup.includes("Choose files"), "no secondary Choose files button");
+      assert(
+        !markup.includes("Add more images"),
+        "compact Add more images heading is not rendered",
+      );
+      assert(
+        !markup.includes("23 more artworks can be added"),
+        "remaining-slot copy from the add-more panel is gone",
+      );
+      assert(!markup.includes("Select images"), "initial uploader stays hidden");
+
+      const addMoreIndex = markup.indexOf("Add More Images");
+      const sharedIndex = markup.indexOf("Shared details for this batch");
+      assert(addMoreIndex > -1, "add-more control exists");
+      assert(sharedIndex > addMoreIndex, "Shared details still follows summary");
+      assertEqual(
+        markup.slice(addMoreIndex, sharedIndex).includes("Choose files"),
+        false,
+        "no panel between Add more images and Shared details",
+      );
+
+      const summarySource = readFileSync(summaryBarPath, "utf8");
+      assert(
+        summarySource.includes("onClick={() => inputRef.current?.click()}"),
+        "one click on Add more images opens the file picker",
+      );
+      assert(
+        summarySource.includes('type="button"'),
+        "Add more images is a button (Enter and Space activate it)",
+      );
+      assert(
+        summarySource.includes('event.target.value = ""'),
+        "hidden input resets after selection",
+      );
+      assert(
+        summarySource.includes("if (files.length === 0) return"),
+        "canceling the picker makes no changes",
+      );
+
+      const formSource = readFileSync(formPath, "utf8");
+      assert(!formSource.includes("showAddMore"), "no add-more panel state");
+      assert(
+        !formSource.includes("Choose files"),
+        "form does not mount a compact add-more uploader",
+      );
+      assertEqual(
+        (formSource.match(/<BatchImageUploader/g) ?? []).length,
+        1,
+        "only the empty-state uploader remains",
+      );
+      assert(
+        formSource.includes("onFilesSelected={(files) => ingestFiles(files)}"),
+        "selected files append through the existing ingest path",
+      );
+    },
+  },
+  {
+    name: "Add more images is disabled and explained when the batch is full",
+    run: () => {
+      const files = Array.from({ length: MAX_ARTWORKS_PER_BATCH }, (_, index) =>
+        makeFile(`Artwork-${index + 1}.jpg`),
+      );
+      const appended = appendFilesToBatch(createEmptyBatch(), files, {
+        allowDuplicates: true,
+        createPreviewUrls: false,
+      });
+      const markup = renderToStaticMarkup(
+        <NewArtworkBatchForm initialBatch={appended.batch} />,
+      );
+      assert(!markup.includes("Add More Images"), "add-more control is not offered");
+      assert(markup.includes("Batch Full"), "full-batch label is shown");
+      assert(
+        markup.includes(`id="${BATCH_SUMMARY_FULL_DESCRIPTION_ID}"`),
+        "full-batch explanation is labeled for the control",
+      );
+      assert(
+        markup.includes(
+          `This batch already has the maximum of ${MAX_ARTWORKS_PER_BATCH} artworks.`,
+        ),
+        "explains that the batch is full",
+      );
+      assert(markup.includes("disabled"), "control is disabled");
+      assert(!markup.includes("Choose files"), "no add-more panel when full");
+
+      const barMarkup = renderToStaticMarkup(
+        <BatchSummaryBar
+          artworkCount={MAX_ARTWORKS_PER_BATCH}
+          maxArtworks={MAX_ARTWORKS_PER_BATCH}
+          totalBytes={64}
+          needingMetadata={0}
+          validationErrors={0}
+          canAddMore={false}
+          onFilesSelected={() => undefined}
+          onRequestClear={() => undefined}
+        />,
+      );
+      assert(barMarkup.includes("disabled"), "summary button is disabled");
+      assert(barMarkup.includes("Batch Full"), "summary shows batch full");
+    },
+  },
+  {
+    name: "Artworks heading uses full width and has no bulk Untitled action",
+    run: () => {
+      const appended = appendFilesToBatch(
+        createEmptyBatch(),
+        [makeFile("Tulip-Tree.jpg"), makeFile("Blue-Garden.jpg")],
+        { allowDuplicates: true, createPreviewUrls: false },
+      );
+      const markup = renderToStaticMarkup(
+        <NewArtworkBatchForm initialBatch={appended.batch} />,
+      );
+      assert(markup.includes('id="artworks-heading"'), "artworks heading");
+      assert(markup.includes("One image per artwork."), "instructional text");
+      assertEqual(
+        markup.split("Missing / no known title").length - 1,
+        2,
+        "one untitled checkbox per artwork",
+      );
+      assert(!markup.includes("Apply Untitled"), "no bulk untitled control");
+      assert(!markup.includes("apply-untitled-title"), "no bulk untitled dialog");
+      assert(
+        !markup.includes("Replace existing titles with Untitled"),
+        "no overwrite confirmation",
+      );
+
+      const formSource = readFileSync(formPath, "utf8");
+      const sectionStart = formSource.indexOf(
+        'aria-labelledby="artworks-heading"',
+      );
+      const cardsStart = formSource.indexOf(
+        '<div className="space-y-3">',
+        sectionStart,
+      );
+      assert(sectionStart > -1, "artworks section");
+      assert(cardsStart > sectionStart, "artwork cards follow heading");
+      const headingBlock = formSource.slice(sectionStart, cardsStart);
+      assert(
+        !headingBlock.includes("sm:justify-between"),
+        "no empty right-side action area",
+      );
+      assert(
+        !headingBlock.includes("sm:flex-row"),
+        "heading is not split into columns",
+      );
+      assert(!headingBlock.includes("shrink-0"), "no reserved action column");
+      assert(
+        headingBlock.includes("One image per artwork."),
+        "instruction stays with heading",
+      );
+
+      const cardSource = readFileSync(
+        join(
+          dirname(fileURLToPath(import.meta.url)),
+          "../../components/artwork/ArtworkCard.tsx",
+        ),
+        "utf8",
+      );
+      assert(cardSource.includes("Missing / no known title"), "checkbox label");
+      assert(
+        cardSource.includes("setArtworkUntitled(artwork, event.target.checked)"),
+        "checkbox toggles only that artwork",
+      );
+      assert(
+        !cardSource.includes("applyUntitledToSelectedArtworks"),
+        "card has no bulk untitled helper",
+      );
+    },
+  },
+  {
+    name: "Batch detail labels omit repeated default wording",
+    run: () => {
+      const markup = renderToStaticMarkup(
+        <SharedDetailsSection
+          shared={EMPTY_SHARED_DETAILS}
+          onChange={() => undefined}
+          onRequestApply={() => undefined}
+        />,
+      );
+      assert(markup.includes(">Exhibition<"), "exhibition");
+      assert(markup.includes(">Gallery / Venue<"), "gallery");
+      assert(markup.includes(">Exhibition Year<"), "exhibition year");
+      assert(markup.includes(">Artwork Year<"), "artwork year");
+      assert(markup.includes(">Photographer<"), "photographer");
+      assert(markup.includes(">Medium<"), "medium");
+      assert(markup.includes(">Dimension Unit<"), "dimension unit");
+      assert(!markup.includes("Default Artwork Year"), "no default year label");
+      assert(!markup.includes("Default Medium"), "no default medium label");
+      assert(
+        !markup.includes("Default Dimension Unit"),
+        "no default unit label",
+      );
+      assert(
+        markup.includes("Shared details for this batch"),
+        "section heading",
+      );
+    },
+  },
+  {
+    name: "Resumable large-file intake cards do not include batch details",
+    run: () => {
+      const markup = renderToStaticMarkup(
+        <LargeMasterIntakePanel
+          inventoryId={1405}
+          title="Vaux’s Swift Watch"
+          folderName="2017_KO_1405_VauxsSwiftWatch"
+          masterFilename="2017_KO_1405_VauxsSwiftWatch_master_01.tif"
+          folderWebUrl="https://www.dropbox.com/home/Apps/Kim%20Art%20Archive/2017_KO_1405_VauxsSwiftWatch"
+          status="waiting_for_dropbox"
+          message=""
+          byteLengthLabel="150.3 MB"
+          canContinueProcessing={false}
+          onCheck={() => undefined}
+          onContinue={() => undefined}
+        />,
+      );
+      assert(markup.includes("Vaux’s Swift Watch"), "title");
+      assert(
+        !markup.includes("Shared details for this batch"),
+        "no shared heading",
+      );
+      assert(!markup.includes("id=\"exhibition\""), "no exhibition field");
+      assert(!markup.includes("id=\"photographer\""), "no photographer field");
+    },
+  },
+  {
+    name: "Apply confirmation shows only populated fields and has no checkboxes",
+    run: () => {
+      const fields = populatedSharedApplyFields({
+        exhibition: "Spring Exhibition",
+        gallery: "Augen Gallery",
+        exhibitionYear: "2026",
+        defaultArtworkYear: "2026",
+        photographer: "Mario Gallucci",
+        defaultMedium: "Monotype",
+        defaultDimensionUnit: "in",
+      });
+      const markup = renderToStaticMarkup(
+        <ApplySharedDetailsConfirmationView
+          artworkCount={6}
+          fields={fields}
+          wouldOverwrite
+        />,
+      );
+      assert(markup.includes(APPLY_SHARED_DETAILS_TITLE), "title");
+      assert(markup.includes(applySharedDetailsBody(6)), "body");
+      assert(markup.includes("Artwork Year: 2026"), "year row");
+      assert(markup.includes("Medium: Monotype"), "medium row");
+      assert(markup.includes("Dimension Unit: inches"), "unit row");
+      assert(markup.includes("Exhibition: Spring Exhibition"), "exhibition row");
+      assert(markup.includes("Gallery / Venue: Augen Gallery"), "gallery row");
+      assert(markup.includes("Photographer: Mario Gallucci"), "photographer row");
+      assert(!markup.includes("Exhibition Year"), "exhibition year omitted");
+      assert(!markup.includes("Exhibition override"), "no override label");
+      assert(
+        !markup.includes("Choose which fields to update"),
+        "no field-selection copy",
+      );
+      assert(!markup.includes('type="checkbox"'), "no checkboxes");
+      assert(!markup.includes("Apply selected"), "old confirm label gone");
+      assert(markup.includes(">Apply to all artworks<"), "confirm button");
+      assert(markup.includes(">Cancel<"), "cancel button");
+      assert(markup.includes(APPLY_SHARED_OVERWRITE_WARNING), "overwrite warning");
+    },
+  },
+  {
+    name: "Apply confirmation is a centered modal overlay rather than inline content",
+    run: () => {
+      const fields = populatedSharedApplyFields({
+        exhibition: "Spring Exhibition",
+        gallery: "",
+        exhibitionYear: "",
+        defaultArtworkYear: "2026",
+        photographer: "",
+        defaultMedium: "",
+        defaultDimensionUnit: "in",
+      });
+      const markup = renderToStaticMarkup(
+        <ApplySharedDetailsConfirmationView
+          artworkCount={5}
+          fields={fields}
+          wouldOverwrite={false}
+        />,
+      );
+      assert(markup.includes('role="dialog"'), "dialog role");
+      assert(markup.includes('aria-modal="true"'), "aria-modal");
+      assert(markup.includes("aria-labelledby="), "labelled by heading");
+      assert(markup.includes('tabindex="-1"'), "heading can receive initial focus");
+      assert(markup.includes("fixed inset-0"), "viewport overlay");
+      assert(markup.includes("items-center"), "centered vertically");
+      assert(markup.includes("justify-center"), "centered horizontally");
+      assert(markup.includes("bg-[var(--ink)]/40"), "darkened backdrop");
+      assert(markup.includes("max-w-lg"), "constrained width");
+      assert(markup.includes("bg-[var(--surface-elevated)]"), "light surface");
+      assert(markup.includes("shadow-sm"), "subtle shadow");
+      assert(markup.includes("p-4"), "responsive outer margin");
+      assert(markup.includes("focus-visible:outline"), "visible focus styles");
+      assert(
+        markup.includes(applySharedDetailsBody(5)),
+        "copy uses the actual artwork count",
+      );
+      assert(
+        !markup.includes("mt-6 border"),
+        "not the in-flow submit-confirm card",
+      );
+
+      const formSource = readFileSync(formPath, "utf8");
+      const applyViewIndex = formSource.indexOf(
+        "<ApplySharedDetailsConfirmationView",
+      );
+      const formCloseIndex = formSource.indexOf("</form>");
+      const summaryIndex = formSource.indexOf("<BatchSummaryBar");
+      const sharedIndex = formSource.indexOf("<SharedDetailsSection");
+      const artworksIndex = formSource.indexOf('aria-labelledby="artworks-heading"');
+      assert(applyViewIndex > -1, "apply confirmation is rendered");
+      assert(formCloseIndex > -1, "form closes");
+      assert(
+        applyViewIndex > formCloseIndex,
+        "modal is outside the form document flow",
+      );
+      assert(
+        applyViewIndex > artworksIndex,
+        "modal is not inserted between Shared details and Artworks",
+      );
+      assert(
+        !formSource.slice(summaryIndex, sharedIndex).includes(
+          "ApplySharedDetailsConfirmationView",
+        ),
+        "modal is not inserted between Batch summary and Shared details",
+      );
+
+      const viewSource = readFileSync(applyConfirmPath, "utf8");
+      assert(
+        viewSource.includes("isModalDismissKey(event.key)"),
+        "Escape closes the modal",
+      );
+      assert(viewSource.includes("trapTabKey("), "Tab is trapped in the modal");
+      assert(
+        viewSource.includes("lockBackgroundScroll(document.body.style)"),
+        "background scroll is locked while open",
+      );
+      assert(
+        viewSource.includes("focusWithoutScrolling(headingRef.current)"),
+        "heading is focused on open without scrolling",
+      );
+      assert(
+        viewSource.includes("focusWithoutScrolling(trigger)"),
+        "focus returns to Apply to all artworks without scrolling",
+      );
+    },
+  },
+  {
+    name: "Apply confirmation traps Tab, dismisses on Escape, and restores focus without scrolling",
+    run: () => {
+      assertEqual(isModalDismissKey("Escape"), true, "Escape dismisses");
+      assertEqual(isModalDismissKey("Enter"), false, "Enter does not dismiss");
+      assertEqual(MODAL_FOCUS_OPTIONS.preventScroll, true, "never scroll on focus");
+
+      const style = { overflow: "" };
+      const unlock = lockBackgroundScroll(style);
+      assertEqual(style.overflow, "hidden", "scroll locked");
+      unlock();
+      assertEqual(style.overflow, "", "scroll restored");
+
+      const focused: string[] = [];
+      const first = { focus: () => focused.push("first") };
+      const last = { focus: () => focused.push("last") };
+      const heading = { focus: () => focused.push("heading") };
+
+      let prevented = 0;
+      trapTabKey(
+        {
+          key: "Tab",
+          shiftKey: false,
+          preventDefault: () => {
+            prevented += 1;
+          },
+        },
+        [first, last],
+        last,
+      );
+      assertEqual(prevented, 1, "Tab from last is trapped");
+      assertEqual(focused.join(","), "first", "wraps to first");
+
+      trapTabKey(
+        {
+          key: "Tab",
+          shiftKey: true,
+          preventDefault: () => {
+            prevented += 1;
+          },
+        },
+        [first, last],
+        first,
+      );
+      assertEqual(prevented, 2, "Shift+Tab from first is trapped");
+      assertEqual(focused.join(","), "first,last", "wraps to last");
+
+      trapTabKey(
+        {
+          key: "Tab",
+          shiftKey: false,
+          preventDefault: () => {
+            prevented += 1;
+          },
+        },
+        [first, last],
+        heading,
+      );
+      assertEqual(prevented, 3, "Tab from heading is trapped");
+      assertEqual(focused.join(","), "first,last,first", "heading Tab goes to first");
+
+      let middlePrevented = false;
+      const handledInMiddle = trapTabKey(
+        {
+          key: "Tab",
+          shiftKey: false,
+          preventDefault: () => {
+            middlePrevented = true;
+          },
+        },
+        [first, last],
+        first,
+      );
+      assertEqual(handledInMiddle, false, "Tab from first is not wrapped");
+      assertEqual(middlePrevented, false, "browser moves to the next control");
+
+      let focusOptions: FocusOptions | undefined;
+      focusWithoutScrolling({
+        focus(options) {
+          focused.push("heading");
+          focusOptions = options;
+        },
+      });
+      assertEqual(focused.at(-1), "heading", "initial heading focus helper");
+      assertEqual(focusOptions?.preventScroll, true, "restore/open focus does not scroll");
+    },
+  },
+  {
+    name: "Apply confirmation omits blank fields and hides overwrite warning when nothing differs",
+    run: () => {
+      const fields = populatedSharedApplyFields({
+        exhibition: "",
+        gallery: "",
+        exhibitionYear: "2026",
+        defaultArtworkYear: "2026",
+        photographer: "",
+        defaultMedium: "",
+        defaultDimensionUnit: "in",
+      });
+      const markup = renderToStaticMarkup(
+        <ApplySharedDetailsConfirmationView
+          artworkCount={2}
+          fields={fields}
+          wouldOverwrite={false}
+        />,
+      );
+      assert(markup.includes("Artwork Year: 2026"), "populated year");
+      assert(markup.includes("Dimension Unit: inches"), "stored unit");
+      assert(!markup.includes("Medium:"), "blank medium omitted");
+      assert(!markup.includes("Exhibition:"), "blank exhibition omitted");
+      assert(!markup.includes("Gallery / Venue:"), "blank gallery omitted");
+      assert(!markup.includes("Photographer:"), "blank photographer omitted");
+      assert(
+        !markup.includes(APPLY_SHARED_OVERWRITE_WARNING),
+        "no overwrite warning",
+      );
+      assert(!markup.includes('type="checkbox"'), "no checkboxes");
+    },
+  },
+  {
+    name: "Batch form apply control does not include field-selection checkboxes",
+    run: () => {
+      const appended = appendFilesToBatch(
+        createEmptyBatch(),
+        [makeFile("Tulip-Tree.jpg")],
+        { allowDuplicates: true, createPreviewUrls: false },
+      );
+      const markup = renderToStaticMarkup(
+        <NewArtworkBatchForm initialBatch={appended.batch} />,
+      );
+      assert(markup.includes("Apply to all artworks"), "apply control");
+      assert(!markup.includes(APPLY_SHARED_DETAILS_TITLE), "modal closed");
+      assert(!markup.includes("fixed inset-0"), "overlay is not in the page flow");
+      assert(
+        !markup.includes("Choose which fields to update"),
+        "no selection copy",
+      );
+      assert(!markup.includes("Apply selected"), "old confirm gone");
+      assertEqual(
+        applySharedDetailsAppliedMessage(6),
+        "Details applied to 6 artworks.",
+        "applied notice copy",
+      );
+      assertEqual(
+        applySharedDetailsAppliedMessage(5),
+        "Details applied to 5 artworks.",
+        "applied notice uses the artwork count",
+      );
+
+      const formSource = readFileSync(formPath, "utf8");
+      const confirmStart = formSource.indexOf("function confirmApplyShared()");
+      const confirmNext = formSource.indexOf("\n  function ", confirmStart + 1);
+      assert(confirmStart > -1, "confirm handler exists");
+      const confirmBody = formSource.slice(
+        confirmStart,
+        confirmNext === -1 ? undefined : confirmNext,
+      );
+      assert(
+        !confirmBody.includes("scrollIntoView"),
+        "applying does not change scroll position",
+      );
+      assert(
+        !confirmBody.includes("enterBatchStep"),
+        "applying does not jump to another step",
+      );
+      assert(confirmBody.includes("setApplyOpen(false)"), "modal closes on apply");
+      assert(
+        confirmBody.includes("applySharedDetailsAppliedMessage"),
+        "shows the applied confirmation",
+      );
+      assert(
+        /applyNotice \? \([\s\S]{0,250}aria-live="polite"/.test(formSource),
+        "applied notice is a non-blocking live region",
+      );
     },
   },
 ];

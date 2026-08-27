@@ -1,5 +1,6 @@
 "use client";
 
+import { BatchStepHeading } from "@/components/artwork/BatchStepHeading";
 import { formatFileSize } from "@/lib/artwork/validation";
 import type { BatchSubmissionResult } from "@/lib/submission/types";
 
@@ -14,7 +15,7 @@ const STAGE_LABELS: Record<string, string> = {
   processing: "Processing",
   folder_created: "Creating Dropbox folder",
   master_uploaded: "Uploading Master",
-  derivatives_generated: "Generating derivatives",
+  derivatives_generated: "Generating all file sizes",
   hr_uploaded: "Uploading High Resolution",
   web_uploaded: "Uploading Web",
   thumb_uploaded: "Uploading thumbnail",
@@ -29,7 +30,7 @@ const OPERATION_LABELS: Record<string, string> = {
   mark_claim_processing: "Marking claim Processing",
   create_folder: "Creating Dropbox folder",
   upload_master: "Uploading Master",
-  generate_derivatives: "Generating derivatives",
+  generate_derivatives: "Generating all file sizes",
   generate_thumbnail: "Generating thumbnail",
   upload_hr: "Uploading High Resolution",
   upload_web: "Uploading Web",
@@ -61,9 +62,7 @@ export function BatchSubmissionReport({
           Kim Artwork Archive
         </p>
         <div className="mt-3 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-          <h1 className="font-display text-4xl tracking-tight text-[var(--ink)] sm:text-5xl">
-            Submission complete
-          </h1>
+          <BatchStepHeading>Submission complete</BatchStepHeading>
           <button
             type="button"
             onClick={onStartNewBatch}
@@ -73,9 +72,8 @@ export function BatchSubmissionReport({
           </button>
         </div>
         <p className="mt-4 max-w-2xl text-[var(--muted)] leading-relaxed">
-          Permanent files (including Inventory-ID metadata) are in Dropbox. The
-          inventory database is in Google Sheets. This app does not retain the
-          archive after delivery.
+          Artwork files and metadata have been saved to Dropbox. Inventory
+          details have been added to Google Sheets.
         </p>
       </header>
 

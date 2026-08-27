@@ -8,6 +8,8 @@ import {
   buildSourceFileFingerprint,
   clearAllTiffPreviewState,
   clearTiffPreviewState,
+  largeMasterPreviewUnavailableMessage,
+  shouldSkipLargeMasterUiPreview,
   shouldSkipTiffUiPreviewUpload,
   tiffUiPreviewSkippedMessage,
   type ImagePreviewApiFailure,
@@ -208,11 +210,18 @@ export function useTiffPreviews() {
       imageLastModified: artwork.image.file.lastModified,
     });
 
-    if (shouldSkipTiffUiPreviewUpload(artwork.image.file.size)) {
+    if (
+      shouldSkipLargeMasterUiPreview(artwork.image.file.size) ||
+      shouldSkipTiffUiPreviewUpload(artwork.image.file.size)
+    ) {
+      const skipMessage = shouldSkipLargeMasterUiPreview(artwork.image.file.size)
+        ? largeMasterPreviewUnavailableMessage()
+        : tiffUiPreviewSkippedMessage(artwork.image.file.name);
       const existing = previewRef.current[artwork.id];
       if (
         existing?.status === "error" &&
-        existing.fingerprint === fingerprint
+        existing.fingerprint === fingerprint &&
+        existing.message === skipMessage
       ) {
         return;
       }
@@ -231,7 +240,7 @@ export function useTiffPreviews() {
           [artwork.id]: {
             status: "error" as const,
             fingerprint,
-            message: tiffUiPreviewSkippedMessage(artwork.image!.file.name),
+            message: skipMessage,
           },
         };
         previewRef.current = next;

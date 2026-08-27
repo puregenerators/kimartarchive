@@ -1,3 +1,5 @@
+import { open } from "node:fs/promises";
+
 import sharp from "sharp";
 
 import { IMAGE_PROCESSING_CONFIG } from "@/lib/images/config";
@@ -45,6 +47,8 @@ export function normalizeMasterExtensionForPlan(filename: string): string {
   return normalizeSourceExtension(filename);
 }
 
+export type ArtworkImageSource = Buffer | string;
+
 export function mapSharpFormatToSupported(
   format: string | undefined,
 ): SupportedArtworkImageFormat | null {
@@ -61,6 +65,35 @@ export type ValidateSourceOptions = {
    */
   maxSourceBytes?: number;
 };
+
+const PHOTOSHOP_DOCUMENT_SIGNATURES = new Set(["8BPS", "8BPB"]);
+
+export async function readArtworkSourcePrefix(
+  source: ArtworkImageSource,
+  length = 8,
+): Promise<Buffer> {
+  if (typeof source !== "string") {
+    return Buffer.from(source.subarray(0, Math.min(length, source.length)));
+  }
+  const handle = await open(source, "r");
+  try {
+    const buf = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buf, 0, length, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Identify signatures Sharp cannot decode, without assuming the file is corrupt. */
+export function unsupportedMasterSignatureMessage(prefix: Buffer): string | null {
+  if (prefix.length < 4) return null;
+  const signature = prefix.toString("latin1", 0, 4);
+  if (PHOTOSHOP_DOCUMENT_SIGNATURES.has(signature)) {
+    return "This file is a Photoshop document, not a TIFF, JPEG, or PNG. Export the master as TIFF, JPEG, or PNG.";
+  }
+  return null;
+}
 
 /**
  * Validate byte length and that Sharp can identify a supported format.
@@ -90,6 +123,12 @@ export async function validateArtworkSourceImage(
     );
   }
 
+  const prefix = await readArtworkSourcePrefix(source);
+  const signatureMessage = unsupportedMasterSignatureMessage(prefix);
+  if (signatureMessage) {
+    throw new ArtworkImageProcessingError("UNSUPPORTED_FORMAT", signatureMessage);
+  }
+
   let metadata: SharpMetadata;
   try {
     metadata = await sharp(source, {
@@ -100,6 +139,12 @@ export async function validateArtworkSourceImage(
       limitInputPixels: IMAGE_PROCESSING_CONFIG.maxDecodedPixels,
     }).metadata();
   } catch (error) {
+    if (!(error instanceof ArtworkImageProcessingError)) {
+      console.error(
+        "[artwork-source-inspect]",
+        error instanceof Error ? error.message : "unknown",
+      );
+    }
     throw mapImageProcessingError(error);
   }
 
@@ -190,8 +235,6 @@ export function orientedPixelSize(
   }
   return { width, height };
 }
-
-export type ArtworkImageSource = Buffer | string;
 
 function createBasePipeline(source: ArtworkImageSource): SharpInstance {
   return sharp(source, {

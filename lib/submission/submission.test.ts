@@ -114,8 +114,9 @@ const tests: TestCase[] = [
         ["c1", "1000", "Completed", "", ""],
         ["c2", "1047", "Failed", "", ""],
         ["c3", "1045", "Claimed", "", ""],
+        ["c4", "1405", "Abandoned", "", ""],
       ]);
-      assertEqual(nextInventoryIdFromExisting(ids), 1048, "max+1");
+      assertEqual(nextInventoryIdFromExisting(ids), 1406, "max+1 including Abandoned");
     },
   },
   {

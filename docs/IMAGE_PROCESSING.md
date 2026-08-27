@@ -2,9 +2,9 @@
 
 Sharp derivative generation is used in three places:
 
-1. **UI TIFF thumbnails** — `POST /api/image-preview` creates temporary JPEG thumbnails so the intake UI can show TIFF masters (browsers cannot render TIFF natively). TIFFs larger than the 4.5 MB Function body limit skip this POST and show a filename/type placeholder instead.
-2. **Dev preview** — `/api/dev/process-artwork-image` for local visual testing from the review screen (temporary OS temp files only).
-3. **Permanent submission** — JSON prepare + direct Dropbox upload + `POST /api/artwork-batches/process` regenerates HR/web/thumbnail server-side from the Dropbox master (does not reuse client preview results).
+1. **UI TIFF thumbnails** — `POST /api/image-preview` creates temporary JPEG thumbnails so the intake UI can show TIFF masters (browsers cannot render TIFF natively). TIFFs larger than the 4.5 MB Function body limit skip this POST and show a filename/type placeholder instead. Masters over **150 MB** never call this route: the UI shows the filename/type placeholder and large-file intake copy, and does not treat a missing preview as a Failed master.
+2. **Local diagnostic** — `/api/dev/process-artwork-image` for visual testing from **Archive setup** (`/setup/archive`) only (temporary OS temp files). This path is disabled on Vercel so source files cannot pass through a production function body. It is not shown on New Artwork Batch or Review Batch, and results are not reused by submission. Files over 150 MB are not accepted here; they use Dropbox intake during submission.
+3. **Permanent submission** — JSON prepare + direct Dropbox upload + `POST /api/artwork-batches/process` regenerates HR/web/thumbnail server-side from the Dropbox master (does not reuse diagnostic preview results). Large-file intake inspects the Dropbox master only after it is in place.
 
 During submission (and the local dev preview), Sharp reads source metadata and decodes the master **once** into an in-memory raw pixel buffer. HR, web, and thumbnail are then encoded **sequentially** from that buffer. Sharp `.clone()` is not used for this: it shares the compressed input but still decodes independently per pipeline. The thumbnail is **not** produced by decoding the HR or web JPEG.
 
@@ -25,9 +25,9 @@ Derivative settings live only in `lib/images/config.ts` and must not be duplicat
 | PNG | `.png` | Transparency flattened to white |
 
 - Maximum source size for **direct upload**: **150 MB**
-- Masters over 150 MB use **large-file Dropbox intake**. Processing still inspects pixel dimensions, bit depth, and estimated memory before decode. Unsafe files are labeled **Local processing required**.
-- Format is determined with **Sharp metadata**, not the filename extension alone
-- Unsupported or unreadable files return a clear structured error
+- Masters over 150 MB use **large-file Dropbox intake**. Preview availability is separate from master-file validity. Processing still inspects pixel dimensions, bit depth, and estimated memory before decode. Unsafe files are labeled **Local processing required**.
+- Format is determined with **Sharp metadata**, not the filename extension alone. A Photoshop document (`8BPS` / `8BPB`) named `.tif` is rejected as an unsupported format after Dropbox placement — it is not treated as a corrupt TIFF.
+- Unsupported or unreadable files return a clear structured error. “The image could not be decoded” is reserved for a real decode attempt on a file already in Dropbox.
 
 ---
 
@@ -36,11 +36,12 @@ Derivative settings live only in `lib/images/config.ts` and must not be duplicat
 Before generating derivatives or UI thumbnails, the server:
 
 1. Rejects empty files. Direct-upload processing still rejects files over 150 MB. Large-file Dropbox intake may process a larger master only after the Vercel memory safety check.
-2. Decodes metadata with Sharp (`failOn: "error"`)
-3. Confirms the detected format is jpeg / png / tiff
-4. Requires width and height
-5. Rejects edges larger than **30,000 px**
-6. Rejects decoded pixel counts above **200,000,000** (~200 MP)
+2. Reads the first bytes for known unsupported signatures (Photoshop `8BPS` / `8BPB`)
+3. Decodes metadata with Sharp (`failOn: "error"`)
+4. Confirms the detected format is jpeg / png / tiff
+5. Requires width and height
+6. Rejects edges larger than **30,000 px**
+7. Rejects decoded pixel counts above **200,000,000** (~200 MP)
 
 These limits are intended for high-resolution artwork photography while reducing decompression-bomb risk.
 
@@ -153,6 +154,7 @@ Used only so the intake UI can display TIFF masters. **Not** an archival derivat
 - The original multi-page file remains the planned master bytes
 - Unsupported TIFF compression surfaces as a structured error when Sharp cannot decode
 - If UI thumbnail generation fails, the neutral TIFF placeholder remains and intake validation / submission are **not** blocked
+- Masters over 150 MB skip `/api/image-preview`. Review Batch shows large-file Dropbox intake copy instead of treating a missing preview as Failed.
 
 **Known limitation:** Some TIFF variants (JPEG2000 compression, unusual photometric interpretations, password-protected files) may fail decode. Prefer LZW / uncompressed TIFF, JPEG, or PNG for intake when possible.
 
@@ -217,49 +219,44 @@ Returns JSON with source metadata, derivative metadata, comparison stats, and op
 
 Serves `hr`, `web`, or `thumb` JPEG. Add `?download=1` for attachment disposition.
 
-These routes must not become a general-purpose image CDN.
+These routes must not become a general-purpose image CDN. `POST /api/dev/process-artwork-image` is blocked when `VERCEL=1` so production deployments cannot accept multipart source files.
 
 ---
 
-## How to test from the intake UI
+## How to review a batch from the intake UI
 
 1. Start the app: `npm run dev`
 2. Open **New Artwork Batch**
 3. Select multiple master images at once (JPEG, PNG, or TIFF)—for example 10 small files. Each file becomes its own artwork entry.
 4. TIFF cards should show **Generating preview…**, then a JPEG thumbnail with a small **TIFF** badge. Queued previews run at most **2 at a time**.
-5. Enter shared details once; use **Apply shared details to all** if needed. Edit titles, media, and dimensions per artwork in the compact rows.
-6. Click **Review Batch** — the same temporary TIFF thumbnails appear in review and in the source column of image-processing comparisons when available.
-7. On each artwork card, click **Test image processing**, or use **Test next unprocessed artwork**. Do not expect full-batch auto-processing in this milestone.
-8. Inspect status: Not tested → Processing → Processed successfully / failed
-9. Review the result panel, which is ordered for scanning:
+5. Enter shared details once; use **Apply to all artworks** if needed. Edit titles, media, and dimensions per artwork in the compact rows.
+6. Click **Review Batch** — the same temporary TIFF thumbnails appear in review. Planned filenames use preview inventory IDs only.
+7. Submit the batch. Permanent delivery runs the canonical image-processing pipeline from the Dropbox master.
+
+Replacing an artwork’s image clears only that artwork’s TIFF thumbnail. Adding or removing other artworks does not discard unrelated thumbnails. Reordering preserves TIFF thumbnail association because it is keyed by the stable artwork client id.
+
+TIFF UI thumbnails are keyed only by artwork id + source file identity (name, size, lastModified).
+
+---
+
+## How to run the local processing diagnostic
+
+Use this only on a local `npm run dev` server. It is not part of intake or Review Batch.
+
+1. Start the app: `npm run dev`
+2. Open **Archive setup** (`/setup/archive`)
+3. Choose a JPEG, PNG, or TIFF under **150 MB**
+4. Click **Process image**
+5. Inspect the result panel, which is ordered for scanning:
    - Heading plus a quiet `Dev preview · processed in … ms` label, the source filename, and source size
    - Any warnings (for example multi-page TIFF handling), always outside collapsed areas
    - A compact **Master / HR / Web / Thumb / Processed in** summary row
-   - Three-column previews (source / HR / web); TIFF sources use the temporary UI thumbnail when available
+   - Three-column previews (source / HR / web); TIFF sources may not have a browser thumbnail
    - HR and web output details: filename with a **Copy** button, size and dimensions, quality and resize status, and one size-vs-source statement
    - A collapsed **Technical details** disclosure holding format, dimensions, color space, DPI, ICC, alpha, orientation, channels, and page count
    - The planned master filename, with original bytes preserved
 
-Planned filenames are listed above the result before processing (and again while a result is stale); once a fresh result exists, the result panel is the single place all three filenames appear.
-
-Replacing an artwork’s image clears only that artwork’s processing result **and** its TIFF thumbnail. Adding or removing other artworks does not discard unrelated results. Reordering preserves TIFF thumbnail association because it is keyed by the stable artwork client id.
-
-### Stale results
-
-Results are keyed by the artwork’s stable client id and a fingerprint of:
-
-- title
-- year
-- preview inventory id (order)
-- source image identity (name, size, lastModified)
-
-Changing those fields marks the result **stale** with:
-
-> Artwork details changed. Reprocess to update filenames and derivatives.
-
-Notes and other unrelated fields do **not** invalidate processing.
-
-TIFF UI thumbnails are keyed only by artwork id + source file identity (name, size, lastModified).
+Diagnostic outputs are temporary and are **not** reused for permanent delivery.
 
 ---
 

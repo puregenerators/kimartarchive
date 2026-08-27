@@ -2,6 +2,7 @@ import {
   MAX_ARTWORKS_PER_BATCH,
   MAX_BATCH_BYTES,
   createArtworkDraft,
+  createEmptyBatch,
   requiresLargeFileDropboxIntake,
   type ArtworkDraft,
   type ArtworkImage,
@@ -53,10 +54,14 @@ export function createArtworkImageFromFile(
   options?: { createPreviewUrl?: boolean },
 ): ArtworkImage {
   const tiff = isTiffFile(file);
+  const largeMaster = requiresLargeFileDropboxIntake(file.size);
   const createPreview = options?.createPreviewUrl ?? true;
   return {
     file,
-    previewUrl: !tiff && createPreview ? URL.createObjectURL(file) : null,
+    previewUrl:
+      !tiff && !largeMaster && createPreview
+        ? URL.createObjectURL(file)
+        : null,
     isTiff: tiff,
   };
 }
@@ -268,15 +273,32 @@ export function removeArtworkFromList(
   };
 }
 
-/** Clear processing state for a single artwork ID only. */
-export function clearProcessingForArtwork<T>(
-  processingByArtworkId: Record<string, T>,
-  artworkId: string,
-): Record<string, T> {
-  if (!(artworkId in processingByArtworkId)) return processingByArtworkId;
-  const next = { ...processingByArtworkId };
-  delete next[artworkId];
-  return next;
+/**
+ * Remove one artwork from the batch. If none remain, return a clean empty
+ * batch (shared details reset) so the intake UI can go back to the
+ * initial upload state.
+ */
+export function removeArtworkFromBatch(
+  batch: BatchDraft,
+  id: string,
+): {
+  batch: BatchDraft;
+  removed: ArtworkDraft | null;
+  returnedToEmpty: boolean;
+} {
+  const { artworks, removed } = removeArtworkFromList(batch.artworks, id);
+  if (artworks.length === 0) {
+    return {
+      batch: createEmptyBatch(),
+      removed,
+      returnedToEmpty: true,
+    };
+  }
+  return {
+    batch: { ...batch, artworks },
+    removed,
+    returnedToEmpty: false,
+  };
 }
 
 export function artworkNeedsMetadata(artwork: ArtworkDraft): boolean {

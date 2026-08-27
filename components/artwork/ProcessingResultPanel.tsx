@@ -16,7 +16,6 @@ type ProcessingResultPanelProps = {
   result: ArtworkProcessingSuccess;
   sourcePreviewUrl: string | null;
   isTiff: boolean;
-  stale: boolean;
 };
 
 function PreviewFrame({
@@ -55,21 +54,11 @@ export function ProcessingResultPanel({
   result,
   sourcePreviewUrl,
   isTiff,
-  stale,
 }: ProcessingResultPanelProps) {
   const { source, hr, web, thumb, comparisons } = result;
 
   return (
     <div className="mt-5 border border-[var(--line)] bg-[var(--surface-elevated)] p-4">
-      {stale ? (
-        <p
-          role="status"
-          className="mb-4 border border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-2 text-sm text-[var(--ink)]"
-        >
-          Artwork details changed. Reprocess to update filenames and derivatives.
-        </p>
-      ) : null}
-
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h4 className="font-display text-lg text-[var(--ink)]">
           Image processing result

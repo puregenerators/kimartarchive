@@ -114,7 +114,7 @@ export const EMPTY_OVERRIDES: ArtworkOverrideFields = {
   photographer: "",
 };
 
-/** Keys that can be selectively applied from shared details onto artworks. */
+/** Keys copied from batch details onto artwork cards on Apply. */
 export type ApplyableSharedFieldKey =
   | "year"
   | "medium"
@@ -127,18 +127,43 @@ export type ApplyableSharedFieldKey =
 export const APPLYABLE_SHARED_FIELDS: ReadonlyArray<{
   key: ApplyableSharedFieldKey;
   label: string;
-  from: string;
 }> = [
-  { key: "year", label: "Artwork Year", from: "Default Artwork Year" },
-  { key: "medium", label: "Medium", from: "Default Medium" },
-  { key: "dimensionUnit", label: "Dimension Unit", from: "Default Dimension Unit" },
-  { key: "exhibition", label: "Exhibition override", from: "Exhibition" },
-  { key: "gallery", label: "Gallery / Venue override", from: "Gallery / Venue" },
-  { key: "photographer", label: "Photographer override", from: "Photographer" },
+  { key: "year", label: "Artwork Year" },
+  { key: "medium", label: "Medium" },
+  { key: "dimensionUnit", label: "Dimension Unit" },
+  { key: "exhibition", label: "Exhibition" },
+  { key: "gallery", label: "Gallery / Venue" },
+  { key: "photographer", label: "Photographer" },
 ];
 
-export const DEFAULT_APPLY_SELECTION: ApplyableSharedFieldKey[] =
-  APPLYABLE_SHARED_FIELDS.map((field) => field.key);
+export const APPLY_SHARED_DETAILS_TITLE =
+  "Apply these details to all artworks?";
+
+export const APPLY_SHARED_OVERWRITE_WARNING =
+  "Any individual changes already entered in these fields will be replaced.";
+
+export function applySharedDetailsBody(artworkCount: number): string {
+  return `This will replace the existing values in these fields for all ${artworkCount} artwork${artworkCount === 1 ? "" : "s"} in the batch. Blank fields will not make any changes.`;
+}
+
+export function applySharedDetailsAppliedMessage(artworkCount: number): string {
+  return `Details applied to ${artworkCount} artwork${artworkCount === 1 ? "" : "s"}.`;
+}
+
+export type PopulatedSharedApplyField = {
+  key: ApplyableSharedFieldKey;
+  label: string;
+  value: string;
+};
+
+type SharedApplyPatch = {
+  year?: string;
+  medium?: string;
+  dimensionUnit?: DimensionUnit;
+  exhibition?: string;
+  gallery?: string;
+  photographer?: string;
+};
 
 export function createArtworkId(): string {
   return crypto.randomUUID();
@@ -199,61 +224,225 @@ const hasText = (value: unknown): value is string =>
   typeof value === "string" && value.trim().length > 0;
 
 /**
- * Apply selected shared defaults onto artworks.
+ * Copy a newly entered batch field onto artworks that still have a blank value.
+ * Does not overwrite a value the user already typed on an individual card.
+ * Dimension unit always has a value, so it is left to explicit Apply.
+ * Exhibition / gallery / photographer stay as shared fallbacks until Apply
+ * writes them into per-artwork overrides.
+ */
+export function fillBlankArtworkFieldsFromShared(
+  artworks: ArtworkDraft[],
+  shared: BatchSharedDetails,
+  field: keyof BatchSharedDetails,
+): ArtworkDraft[] {
+  if (field === "defaultArtworkYear") {
+    const year = shared.defaultArtworkYear.trim();
+    if (!year) return artworks;
+    return artworks.map((artwork) =>
+      artwork.year.trim() ? artwork : { ...artwork, year },
+    );
+  }
+  if (field === "defaultMedium") {
+    const medium = shared.defaultMedium.trim();
+    if (!medium) return artworks;
+    return artworks.map((artwork) =>
+      artwork.medium.trim() ? artwork : { ...artwork, medium },
+    );
+  }
+  return artworks;
+}
+
+function formatApplyDimensionUnit(unit: DimensionUnit): string {
+  return unit === "in" ? "inches" : unit;
+}
+
+function labelForApplyField(key: ApplyableSharedFieldKey): string {
+  const field = APPLYABLE_SHARED_FIELDS.find((entry) => entry.key === key);
+  return field?.label ?? key;
+}
+
+/**
+ * Values that Apply copies onto artworks. Uses stored batch data only —
+ * empty strings and whitespace are omitted even if the UI shows a placeholder
+ * (for example Artwork Year’s “2026” placeholder). Dimension unit is stored as
+ * `in` or `cm` on the batch, so it is included. Exhibition year is batch-level
+ * only and is never applied to artwork cards.
+ */
+function sharedApplyPatch(shared: BatchSharedDetails): SharedApplyPatch {
+  return {
+    ...(hasText(shared.defaultArtworkYear) && {
+      year: shared.defaultArtworkYear.trim(),
+    }),
+    ...(hasText(shared.defaultMedium) && {
+      medium: shared.defaultMedium.trim(),
+    }),
+    dimensionUnit: shared.defaultDimensionUnit,
+    ...(hasText(shared.exhibition) && {
+      exhibition: shared.exhibition.trim(),
+    }),
+    ...(hasText(shared.gallery) && {
+      gallery: shared.gallery.trim(),
+    }),
+    ...(hasText(shared.photographer) && {
+      photographer: shared.photographer.trim(),
+    }),
+  };
+}
+
+/** Read-only confirmation rows: populated apply fields and their proposed values. */
+export function populatedSharedApplyFields(
+  shared: BatchSharedDetails,
+): PopulatedSharedApplyField[] {
+  const patch = sharedApplyPatch(shared);
+  const fields: PopulatedSharedApplyField[] = [];
+  if (patch.year) {
+    fields.push({
+      key: "year",
+      label: labelForApplyField("year"),
+      value: patch.year,
+    });
+  }
+  if (patch.medium) {
+    fields.push({
+      key: "medium",
+      label: labelForApplyField("medium"),
+      value: patch.medium,
+    });
+  }
+  if (patch.dimensionUnit) {
+    fields.push({
+      key: "dimensionUnit",
+      label: labelForApplyField("dimensionUnit"),
+      value: formatApplyDimensionUnit(patch.dimensionUnit),
+    });
+  }
+  if (patch.exhibition) {
+    fields.push({
+      key: "exhibition",
+      label: labelForApplyField("exhibition"),
+      value: patch.exhibition,
+    });
+  }
+  if (patch.gallery) {
+    fields.push({
+      key: "gallery",
+      label: labelForApplyField("gallery"),
+      value: patch.gallery,
+    });
+  }
+  if (patch.photographer) {
+    fields.push({
+      key: "photographer",
+      label: labelForApplyField("photographer"),
+      value: patch.photographer,
+    });
+  }
+  return fields;
+}
+
+function existingArtworkValueForApplyField(
+  artwork: ArtworkDraft,
+  key: ApplyableSharedFieldKey,
+): string {
+  switch (key) {
+    case "year":
+      return artwork.year;
+    case "medium":
+      return artwork.medium;
+    case "dimensionUnit":
+      return artwork.dimensionUnit;
+    case "exhibition":
+      return artwork.overrides.exhibition;
+    case "gallery":
+      return artwork.overrides.gallery;
+    case "photographer":
+      return artwork.overrides.photographer;
+  }
+}
+
+function proposedValueForApplyField(
+  patch: SharedApplyPatch,
+  key: ApplyableSharedFieldKey,
+): string | undefined {
+  switch (key) {
+    case "year":
+      return patch.year;
+    case "medium":
+      return patch.medium;
+    case "dimensionUnit":
+      return patch.dimensionUnit;
+    case "exhibition":
+      return patch.exhibition;
+    case "gallery":
+      return patch.gallery;
+    case "photographer":
+      return patch.photographer;
+  }
+}
+
+/**
+ * True when applying populated batch fields would replace a different
+ * non-blank value already entered on at least one artwork.
+ */
+export function sharedApplyWouldOverwrite(
+  artworks: ArtworkDraft[],
+  shared: BatchSharedDetails,
+): boolean {
+  const patch = sharedApplyPatch(shared);
+  const keys = populatedSharedApplyFields(shared).map((field) => field.key);
+  return artworks.some((artwork) =>
+    keys.some((key) => {
+      const proposed = proposedValueForApplyField(patch, key);
+      if (proposed == null) return false;
+      const existing = existingArtworkValueForApplyField(artwork, key).trim();
+      if (!existing) return false;
+      return existing !== proposed;
+    }),
+  );
+}
+
+/**
+ * Apply populated shared defaults onto artworks.
  * Only populated shared fields are copied; blank / whitespace shared values
  * leave each artwork’s existing value unchanged.
  * Never overwrites Title, the untitled flag, Height, Width, Depth, Notes, or image.
- * Exhibition / gallery / photographer write into override fields when selected.
+ * Exhibition / gallery / photographer write into per-artwork override fields.
  */
 export function applySharedDetailsToArtworks(
   artworks: ArtworkDraft[],
   shared: BatchSharedDetails,
-  selectedKeys: readonly ApplyableSharedFieldKey[] = DEFAULT_APPLY_SELECTION,
 ): ArtworkDraft[] {
-  const selected = new Set(selectedKeys);
-
-  const sharedPatch = {
-    ...(selected.has("year") &&
-      hasText(shared.defaultArtworkYear) && {
-        year: shared.defaultArtworkYear.trim(),
-      }),
-    ...(selected.has("medium") &&
-      hasText(shared.defaultMedium) && {
-        medium: shared.defaultMedium.trim(),
-      }),
-    ...(selected.has("dimensionUnit") && {
-      dimensionUnit: shared.defaultDimensionUnit,
-    }),
-    ...(selected.has("exhibition") &&
-      hasText(shared.exhibition) && {
-        exhibition: shared.exhibition.trim(),
-      }),
-    ...(selected.has("gallery") &&
-      hasText(shared.gallery) && {
-        gallery: shared.gallery.trim(),
-      }),
-    ...(selected.has("photographer") &&
-      hasText(shared.photographer) && {
-        photographer: shared.photographer.trim(),
-      }),
-  };
+  const patch = sharedApplyPatch(shared);
 
   return artworks.map((artwork) => ({
     ...artwork,
-    ...("year" in sharedPatch && { year: sharedPatch.year }),
-    ...("medium" in sharedPatch && { medium: sharedPatch.medium }),
-    ...("dimensionUnit" in sharedPatch && {
-      dimensionUnit: sharedPatch.dimensionUnit,
+    ...("year" in patch && { year: patch.year }),
+    ...("medium" in patch && { medium: patch.medium }),
+    ...("dimensionUnit" in patch && {
+      dimensionUnit: patch.dimensionUnit,
     }),
     overrides: {
       ...artwork.overrides,
-      ...("exhibition" in sharedPatch && {
-        exhibition: sharedPatch.exhibition,
+      ...("exhibition" in patch && {
+        exhibition: patch.exhibition,
       }),
-      ...("gallery" in sharedPatch && { gallery: sharedPatch.gallery }),
-      ...("photographer" in sharedPatch && {
-        photographer: sharedPatch.photographer,
+      ...("gallery" in patch && { gallery: patch.gallery }),
+      ...("photographer" in patch && {
+        photographer: patch.photographer,
       }),
     },
   }));
+}
+
+/**
+ * Confirm copies populated batch fields onto every artwork.
+ * Cancel returns the same artwork list with no changes.
+ */
+export function resolveApplySharedDetails(
+  artworks: ArtworkDraft[],
+  shared: BatchSharedDetails,
+  decision: "apply" | "cancel",
+): ArtworkDraft[] {
+  if (decision !== "apply") return artworks;
+  return applySharedDetailsToArtworks(artworks, shared);
 }

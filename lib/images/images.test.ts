@@ -6,11 +6,13 @@
 import sharp from "sharp";
 
 import { IMAGE_PROCESSING_CONFIG } from "./config";
-import { ArtworkImageProcessingError } from "./errors";
 import {
-  buildImageProcessingFingerprint,
-  isProcessingResultStale,
-} from "./fingerprint";
+  localDevMultipartProcessingAllowed,
+} from "./dev-process-guard";
+import {
+  ArtworkImageProcessingError,
+  mapImageProcessingError,
+} from "./errors";
 import {
   isSafePlannedFilename,
   normalizeSourceExtension,
@@ -23,6 +25,7 @@ import {
   orientedPixelSize,
   processArtworkImage,
   readArtworkSourceMetadata,
+  unsupportedMasterSignatureMessage,
   validateArtworkSourceImage,
 } from "./process-impl";
 
@@ -373,41 +376,6 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "stale-result fingerprint logic",
-    run: () => {
-      const base = {
-        title: "Blue Garden",
-        year: "2026",
-        previewInventoryId: 1000,
-        imageName: "a.jpg",
-        imageSize: 1234,
-        imageLastModified: 99,
-      };
-      const fp = buildImageProcessingFingerprint(base);
-      assert(!isProcessingResultStale(fp, base), "same not stale");
-      assert(
-        isProcessingResultStale(fp, { ...base, title: "Other" }),
-        "title stale",
-      );
-      assert(
-        isProcessingResultStale(fp, { ...base, year: "2025" }),
-        "year stale",
-      );
-      assert(
-        isProcessingResultStale(fp, { ...base, previewInventoryId: 1001 }),
-        "inventory stale",
-      );
-      assert(
-        isProcessingResultStale(fp, { ...base, imageName: "b.jpg" }),
-        "image stale",
-      );
-      assert(
-        !isProcessingResultStale(fp, base),
-        "unchanged fingerprint still fresh (notes excluded)",
-      );
-    },
-  },
-  {
     name: "oversized byte length rejected",
     run: async () => {
       const png = await solidPng(8, 8);
@@ -422,6 +390,39 @@ const tests: TestCase[] = [
         code = error.code;
       }
       assertEqual(code, "FILE_TOO_LARGE", "too large");
+    },
+  },
+  {
+    name: "Photoshop document signature is unsupported, not treated as a corrupt TIFF",
+    run: async () => {
+      const psd = Buffer.alloc(32, 0);
+      psd.write("8BPS", 0, 4, "latin1");
+      psd.writeUInt16BE(1, 4);
+      const mapped = mapImageProcessingError(
+        new Error("Input buffer contains unsupported image format"),
+      );
+      assertEqual(mapped.code, "UNSUPPORTED_FORMAT", "sharp unsupported maps format");
+      assert(
+        !mapped.message.toLowerCase().includes("corrupt"),
+        "does not call the file corrupt",
+      );
+      const signature = unsupportedMasterSignatureMessage(psd);
+      assert(signature && signature.includes("Photoshop"), "psd signature copy");
+
+      let code: string | null = null;
+      let message = "";
+      try {
+        await validateArtworkSourceImage(psd, {
+          originalFilename: "VauxsSwiftWatch.tif",
+          byteLength: psd.byteLength,
+        });
+      } catch (error) {
+        assert(error instanceof ArtworkImageProcessingError, "typed");
+        code = error.code;
+        message = error.message;
+      }
+      assertEqual(code, "UNSUPPORTED_FORMAT", "validate code");
+      assert(message.includes("Photoshop"), "validate copy");
     },
   },
   {
@@ -490,6 +491,23 @@ const tests: TestCase[] = [
         result.master.byteLength,
         tiffBytes.byteLength,
         "master intact",
+      );
+    },
+  },
+  {
+    name: "local multipart processing diagnostic is blocked on Vercel",
+    run: () => {
+      assertEqual(
+        localDevMultipartProcessingAllowed({ ...process.env, VERCEL: "1" }),
+        false,
+        "blocked on Vercel",
+      );
+      const { VERCEL: _vercel, ...withoutVercel } = process.env;
+      void _vercel;
+      assertEqual(
+        localDevMultipartProcessingAllowed(withoutVercel),
+        true,
+        "allowed off Vercel",
       );
     },
   },

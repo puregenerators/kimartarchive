@@ -203,6 +203,7 @@ const tests: TestCase[] = [
       assertEqual(canReuseClaimStatus("Claimed"), true, "claimed");
       assertEqual(canReuseClaimStatus("Failed"), false, "failed");
       assertEqual(canReuseClaimStatus("Completed"), false, "completed");
+      assertEqual(canReuseClaimStatus("Abandoned"), false, "abandoned");
       const row = findClaimRowByClaimId(
         [["claim-1", "1401", "Processing", "t", ""]],
         "claim-1",
@@ -346,6 +347,11 @@ const tests: TestCase[] = [
         canReuseClaimStatus("Failed"),
         false,
         "Failed IDs stay retired",
+      );
+      assertEqual(
+        canReuseClaimStatus("Abandoned"),
+        false,
+        "Abandoned IDs stay retired",
       );
     },
   },

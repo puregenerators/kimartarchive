@@ -24,7 +24,6 @@ export type ClientProcessingComparisons = {
 
 export type ArtworkProcessingSuccess = {
   status: "success";
-  fingerprint: string;
   resultId: string;
   expiresAt: number;
   durationMs: number;
@@ -41,21 +40,6 @@ export type ArtworkProcessingSuccess = {
   thumb: ClientProcessedDerivative;
   comparisons: ClientProcessingComparisons;
 };
-
-export type ArtworkProcessingState =
-  | { status: "idle" }
-  | { status: "processing" }
-  | ArtworkProcessingSuccess
-  | {
-      status: "error";
-      fingerprint: string;
-      code: string;
-      message: string;
-    }
-  | {
-      status: "stale";
-      previous: ArtworkProcessingSuccess;
-    };
 
 export type ProcessArtworkImageApiSuccess = {
   ok: true;

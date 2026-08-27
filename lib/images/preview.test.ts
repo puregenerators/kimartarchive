@@ -13,7 +13,10 @@ import {
   clearAllTiffPreviewState,
   clearTiffPreviewState,
   buildSourceFileFingerprint,
+  LARGE_MASTER_PREVIEW_UNAVAILABLE_MESSAGE,
+  largeMasterPreviewUnavailableMessage,
   resolveTiffPreviewUrl,
+  shouldSkipLargeMasterUiPreview,
   shouldSkipTiffUiPreviewUpload,
   TIFF_UI_PREVIEW_MAX_UPLOAD_BYTES,
   VERCEL_FUNCTION_BODY_LIMIT_BYTES,
@@ -25,17 +28,17 @@ import { createPreviewQueue } from "./preview-queue";
 import { generateUiPreviewJpeg } from "./preview";
 import {
   appendFilesToBatch,
-  clearProcessingForArtwork,
   reorderArtworks,
   replaceArtworkImage,
 } from "@/lib/artwork/batch-files";
 import {
   createEmptyBatch,
   createArtworkDraft,
+  MAX_FILE_BYTES,
   type ArtworkDraft,
 } from "@/lib/artwork/types";
-import { validateArtworkDraft } from "@/lib/artwork/validation";
-import { batchDraftToSubmissionPayload } from "@/lib/submission/validate-input";
+import { validateArtworkDraft, validateBatch, hasBatchErrors } from "@/lib/artwork/validation";
+import { batchDraftToSubmissionPayload, validateSubmissionBatchDeclared } from "@/lib/submission/validate-input";
 import { buildArtworkInventoryRow } from "@/lib/submission/inventory-row";
 import { resolveArtworkMetadata } from "@/lib/submission/claim-logic";
 import { ARTWORK_INVENTORY_HEADERS } from "@/lib/google/headers";
@@ -83,6 +86,16 @@ function makeFileFromBuffer(
     type,
     lastModified: 1_700_000_000_000,
   });
+}
+
+function makeOversizedTiff(name: string, size = MAX_FILE_BYTES + 314_573): File {
+  const buffer = Buffer.from("II*\u0000");
+  const file = new File([buffer], name, {
+    type: "image/tiff",
+    lastModified: 1_700_000_000_000,
+  });
+  Object.defineProperty(file, "size", { value: size });
+  return file;
 }
 
 const tests: TestCase[] = [
@@ -210,6 +223,88 @@ const tests: TestCase[] = [
         message.toLowerCase().includes("intake can continue"),
         "intake continues",
       );
+    },
+  },
+  {
+    name: "oversized TIFF with no preview remains eligible for large-file intake",
+    run: () => {
+      const size = MAX_FILE_BYTES + 314_573;
+      assertEqual(shouldSkipLargeMasterUiPreview(MAX_FILE_BYTES), false, "at cap");
+      assertEqual(shouldSkipLargeMasterUiPreview(size), true, "over cap");
+      assertEqual(
+        shouldSkipTiffUiPreviewUpload(size),
+        true,
+        "does not POST /api/image-preview",
+      );
+      assertEqual(
+        largeMasterPreviewUnavailableMessage(),
+        LARGE_MASTER_PREVIEW_UNAVAILABLE_MESSAGE,
+        "preview copy",
+      );
+
+      const file = makeOversizedTiff("Vauxs Swift Watch 44X84.tif", size);
+      const result = appendFilesToBatch(createEmptyBatch(), [file], {
+        createPreviewUrls: true,
+      });
+      assertEqual(result.added.length, 1, "kept in batch");
+      assertEqual(result.rejected.length, 0, "not rejected");
+      const artwork = result.added[0]!;
+      artwork.title = "Vaux's Swift Watch";
+      artwork.year = "2017";
+      artwork.medium = "Monotype";
+      assertEqual(artwork.image?.previewUrl, null, "no browser preview url");
+      assertEqual(artwork.image?.isTiff, true, "tiff");
+
+      const errors = validateArtworkDraft(artwork);
+      assertEqual(errors.image, undefined, "preview skip is not a validation error");
+      const batchErrors = validateBatch(result.batch);
+      assertEqual(
+        batchErrors.artworks[artwork.id]?.image,
+        undefined,
+        "batch image field ok",
+      );
+      assertEqual(hasBatchErrors(batchErrors), false, "batch eligible to review");
+
+      const fingerprint = buildSourceFileFingerprint({
+        imageName: file.name,
+        imageSize: file.size,
+        imageLastModified: file.lastModified,
+      });
+      const markup = renderToStaticMarkup(
+        createElement(ArtworkImageThumb, {
+          image: artwork.image,
+          tiffPreview: {
+            status: "error",
+            fingerprint,
+            message: LARGE_MASTER_PREVIEW_UNAVAILABLE_MESSAGE,
+          },
+        }),
+      );
+      assert(markup.includes("Vauxs Swift Watch 44X84.tif"), "filename placeholder");
+      assert(markup.includes("TIFF"), "type placeholder");
+      assert(
+        !markup.includes("could not be decoded"),
+        "placeholder is not a decode failure",
+      );
+
+      const payload = batchDraftToSubmissionPayload({
+        shared: result.batch.shared,
+        artworks: [artwork],
+      });
+      const declared = validateSubmissionBatchDeclared({
+        submissionAttemptId: "attempt-large-tiff",
+        shared: payload.shared,
+        artworks: payload.artworks,
+        files: [
+          {
+            clientArtworkId: artwork.id,
+            filename: file.name,
+            mimeType: file.type,
+            byteLength: file.size,
+          },
+        ],
+      });
+      assertEqual(declared.ok, true, "prepare validation accepts oversized TIFF");
     },
   },
   {
@@ -418,12 +513,6 @@ const tests: TestCase[] = [
       };
       const cleared = clearAllTiffPreviewState(previews);
       assertEqual(Object.keys(cleared).length, 0, "empty after reset");
-      // Processing clear is independent and still works the same way.
-      const processing = clearProcessingForArtwork(
-        { "id-1": { status: "idle" as const } },
-        "id-1",
-      );
-      assert(!("id-1" in processing), "processing cleared");
     },
   },
   {
