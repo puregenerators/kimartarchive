@@ -13,6 +13,7 @@ import { ArchivePreviewImage } from "@/components/archive/ArchivePreviewImage";
 import { ArchiveYearNav } from "@/components/archive/ArchiveYearNav";
 import { ArchiveYearSections } from "@/components/archive/ArchiveYearSections";
 import { ArtworkDetailView } from "@/components/archive/ArtworkDetailView";
+import { ArtworksArchiveHeader } from "@/components/archive/ArtworksArchiveHeader";
 import { ArtworksArchiveView } from "@/components/archive/ArtworksArchiveView";
 import { webFileDisplayUrlFromCanonical } from "@/lib/archive/dropbox-display-url";
 import {
@@ -29,8 +30,14 @@ import {
   groupArtworksByYear,
   searchArchiveArtworks,
 } from "@/lib/archive/records";
+import {
+  ARCHIVE_RESOURCE_LINK_COPY,
+  archiveResourceLinks,
+  productionSpreadsheetHref,
+} from "@/lib/archive/resource-links";
 import type { ArchiveArtwork } from "@/lib/archive/types";
 import { UNTITLED_TITLE } from "@/lib/artwork/untitled";
+import { DROPBOX_ARCHIVE_ROOT_WEB_URL } from "@/lib/dropbox/types";
 
 type TestCase = { name: string; run: () => void };
 
@@ -401,6 +408,28 @@ const tests: TestCase[] = [
     },
   },
   {
+    name: "year headings stay a light serif label with tighter space above",
+    run: () => {
+      const markup = renderToStaticMarkup(
+        <ArchiveYearSections
+          groups={groupArtworksByYear([
+            artwork({ year: "2026", inventoryId: 1004 }),
+            artwork({ year: "2025", inventoryId: 1005, title: "Blue Garden" }),
+          ])}
+        />,
+      );
+      assert(markup.includes("font-display"), "serif year heading");
+      assert(markup.includes("text-[1.75rem]"), "slightly larger year");
+      assert(markup.includes("md:text-[2.2rem]"), "slightly larger year on md");
+      assert(!markup.includes("font-bold"), "year is not bold");
+      assert(markup.includes("gap-[4.5rem]"), "reduced space above year");
+      assert(markup.includes("md:gap-20"), "reduced space above year on md");
+      assert(markup.includes("gap-8"), "space below year preserved");
+      assert(markup.includes(`id="${yearSectionId("2026")}"`), "2026 section");
+      assert(markup.includes(`id="${yearSectionId("2025")}"`), "2025 section");
+    },
+  },
+  {
     name: "search keeps an accessible label and inventory IDs stay visible",
     run: () => {
       const markup = renderToStaticMarkup(
@@ -532,6 +561,109 @@ const tests: TestCase[] = [
         "error shown",
       );
       assert(markup.includes('role="alert"'), "alert role");
+    },
+  },
+  {
+    name: "production spreadsheet href uses the canonical browser URL helper",
+    run: () => {
+      const toBrowserUrl = (spreadsheetId: string) =>
+        `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
+      assertEqual(
+        productionSpreadsheetHref("  prod-sheet-id  ", toBrowserUrl),
+        "https://docs.google.com/spreadsheets/d/prod-sheet-id/edit",
+        "trims GOOGLE_SHEET_ID and reuses the spreadsheet URL helper",
+      );
+      assertEqual(
+        productionSpreadsheetHref("   ", toBrowserUrl),
+        null,
+        "omits the spreadsheet link when the production sheet ID is blank",
+      );
+      assertEqual(
+        productionSpreadsheetHref(undefined, toBrowserUrl),
+        null,
+        "omits the spreadsheet link when the production sheet ID is unset",
+      );
+    },
+  },
+  {
+    name: "archive resource links reuse the Dropbox App Folder web URL",
+    run: () => {
+      const links = archiveResourceLinks({
+        spreadsheetHref:
+          "https://docs.google.com/spreadsheets/d/prod-sheet-id/edit",
+      });
+      assertDeepEqual(
+        links.map((link) => link.key),
+        ["spreadsheet", "dropbox"],
+        "spreadsheet then Dropbox",
+      );
+      assertEqual(
+        links[1]!.href,
+        DROPBOX_ARCHIVE_ROOT_WEB_URL,
+        "Dropbox href is the canonical archive folder web URL",
+      );
+      assert(
+        !links[1]!.href.includes("Apps/Kim Art Archive/"),
+        "does not invent a Dropbox URL from the display folder path",
+      );
+      assertEqual(
+        archiveResourceLinks({ spreadsheetHref: null }).length,
+        1,
+        "Dropbox remains when the spreadsheet is unconfigured",
+      );
+    },
+  },
+  {
+    name: "archive heading keeps resource links as compact external shortcuts",
+    run: () => {
+      const spreadsheetHref =
+        "https://docs.google.com/spreadsheets/d/prod-sheet-id/edit";
+      const markup = renderToStaticMarkup(
+        <ArtworksArchiveHeader spreadsheetHref={spreadsheetHref} />,
+      );
+      const headingAt = markup.indexOf("Kim&#x27;s Artwork Archive");
+      const navAt = markup.indexOf('aria-label="Archive resources"');
+      const spreadsheetAt = markup.indexOf(ARCHIVE_RESOURCE_LINK_COPY.spreadsheet);
+      const dropboxAt = markup.indexOf(ARCHIVE_RESOURCE_LINK_COPY.dropbox);
+      assert(headingAt >= 0, "archive heading");
+      assert(navAt > headingAt, "links sit under the heading");
+      assert(spreadsheetAt > navAt, "spreadsheet label in the resource nav");
+      assert(dropboxAt > spreadsheetAt, "Dropbox follows spreadsheet");
+      assert(markup.includes(`href="${spreadsheetHref}"`), "production sheet URL");
+      assert(
+        markup.includes(`href="${DROPBOX_ARCHIVE_ROOT_WEB_URL}"`),
+        "canonical Dropbox folder URL",
+      );
+      assert(markup.includes('target="_blank"'), "opens in a new tab");
+      assert(markup.includes('rel="noopener noreferrer"'), "external link safety");
+      assert(markup.includes(ARCHIVE_RESOURCE_LINK_COPY.externalArrow), "subtle arrow");
+      assert(markup.includes("flex-wrap"), "links wrap on narrow screens");
+      assert(markup.includes("uppercase"), "utility label casing");
+      assert(markup.includes("tracking-[0.14em]"), "letter spacing matches archive labels");
+      assert(!markup.includes("<button"), "not buttons");
+      assert(!markup.includes("bg-[var(--surface"), "no filled background");
+      assert(!markup.includes("border border-"), "no card or large border");
+      assert(!markup.includes("rounded"), "no card container");
+    },
+  },
+  {
+    name: "archive resource links are not placed in global navigation",
+    run: () => {
+      const markup = renderToStaticMarkup(
+        <AppNavView
+          pathname="/artworks"
+          menuOpen={true}
+          onMenuToggle={() => {}}
+        />,
+      );
+      assert(
+        !markup.includes(ARCHIVE_RESOURCE_LINK_COPY.spreadsheet),
+        "spreadsheet stays off global nav",
+      );
+      assert(
+        !markup.includes(ARCHIVE_RESOURCE_LINK_COPY.dropbox),
+        "Dropbox stays off global nav",
+      );
     },
   },
   {

@@ -1,18 +1,23 @@
 import Link from "next/link";
 import { SetupGoogleClient } from "@/app/setup/google/SetupGoogleClient";
 import { requireAuthenticatedPage } from "@/lib/auth/access";
+import { runDropboxDiagnostics } from "@/lib/dropbox/health";
+import { ARCHIVE_STATUS_COPY } from "@/lib/google/archive-status-presentation";
 import { runGoogleDiagnostics } from "@/lib/google/diagnostics";
 
 export const metadata = {
-  title: "Google Sheet Tools · Kim Artwork Archive",
-  description: "Diagnostics for Google Sheets (metadata) and legacy Drive tooling.",
+  title: "Archive status · Kim Artwork Archive",
+  description: ARCHIVE_STATUS_COPY.intro,
 };
 
 export const dynamic = "force-dynamic";
 
 export default async function SetupGooglePage() {
   await requireAuthenticatedPage();
-  const diagnostics = await runGoogleDiagnostics();
+  const [diagnostics, dropbox] = await Promise.all([
+    runGoogleDiagnostics(),
+    runDropboxDiagnostics(),
+  ]);
 
   return (
     <main className="relative mx-auto w-full max-w-3xl flex-1 px-5 py-12 sm:px-8 sm:py-16">
@@ -20,12 +25,10 @@ export default async function SetupGooglePage() {
         Kim Osgood Archive
       </p>
       <h1 className="mt-3 font-display text-4xl tracking-tight text-[var(--ink)]">
-        Google sheet tools
+        {ARCHIVE_STATUS_COPY.pageTitle}
       </h1>
       <p className="mt-4 max-w-2xl text-sm text-[var(--muted)] leading-relaxed">
-        Google Sheets is the permanent metadata store. Artwork files will live in
-        Dropbox (see Archive setup). Credentials are validated on the server only
-        and are never shown here.
+        {ARCHIVE_STATUS_COPY.intro}
       </p>
       <p className="mt-2 text-sm">
         <Link
@@ -37,7 +40,10 @@ export default async function SetupGooglePage() {
       </p>
 
       <div className="mt-10">
-        <SetupGoogleClient initialDiagnostics={diagnostics} />
+        <SetupGoogleClient
+          initialDiagnostics={diagnostics}
+          dropbox={dropbox}
+        />
       </div>
     </main>
   );

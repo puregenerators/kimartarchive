@@ -1,8 +1,11 @@
 import Link from "next/link";
 
+import { ArtworksArchiveHeader } from "@/components/archive/ArtworksArchiveHeader";
 import { ArtworksArchiveInteractive } from "@/components/archive/ArtworksArchiveInteractive";
 import { loadArtworkArchive } from "@/lib/archive/load";
+import { productionSpreadsheetHref } from "@/lib/archive/resource-links";
 import { requireAuthenticatedPage } from "@/lib/auth/access";
+import { spreadsheetBrowserUrl } from "@/lib/google/sheets";
 
 export const metadata = {
   title: "Kim Artwork Archive",
@@ -15,12 +18,14 @@ export const revalidate = 0;
 export default async function ArtworksPage() {
   await requireAuthenticatedPage();
   const result = await loadArtworkArchive();
+  const spreadsheetHref = productionSpreadsheetHref(
+    process.env.GOOGLE_SHEET_ID,
+    spreadsheetBrowserUrl,
+  );
 
   return (
     <main className="relative mx-auto w-full min-w-0 max-w-7xl flex-1 px-5 pb-20 pt-10 md:px-8 md:pb-28 md:pt-28">
-      <h1 className="break-words font-display text-4xl leading-tight tracking-tight text-[var(--ink)] md:text-5xl">
-        Kim&apos;s Artwork Archive
-      </h1>
+      <ArtworksArchiveHeader spreadsheetHref={spreadsheetHref} />
 
       <div className="mt-10 md:mt-12">
         {!result.ok ? (

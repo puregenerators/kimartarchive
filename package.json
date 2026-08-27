@@ -13,7 +13,7 @@
     "test:submit-status": "tsx lib/artwork/submit-status-ui.test.tsx",
     "test:suggest-title": "tsx lib/artwork/suggest-title.test.ts",
     "test:medium": "tsx lib/artwork/medium.test.ts",
-    "test:google": "tsx lib/google/google.test.ts",
+    "test:google": "tsx lib/google/google.test.ts && tsx lib/google/archive-status-ui.test.tsx",
     "test:images": "tsx lib/images/images.test.ts",
     "test:preview": "tsx lib/images/preview.test.ts",
     "test:result-ui": "tsx lib/images/result-ui.test.tsx",
@@ -22,7 +22,7 @@
     "test:dropbox": "tsx lib/dropbox/dropbox.test.ts",
     "test:storage": "tsx lib/storage/storage.test.ts",
     "test:archive": "tsx lib/archive/archive.test.ts",
-    "test:archive-ui": "tsx lib/archive/archive-ui.test.tsx",
+    "test:archive-ui": "tsx lib/archive/archive-ui.test.tsx && tsx lib/archive/setup-ui.test.tsx",
     "test:auth": "tsx lib/auth/session.test.ts",
     "test:auth-ui": "tsx lib/auth/auth-ui.test.tsx",
     "test": "npm run test:filenames && npm run test:batch && npm run test:batch-reset && npm run test:submit-status && npm run test:suggest-title && npm run test:medium && npm run test:google && npm run test:images && npm run test:preview && npm run test:result-ui && npm run test:submission && npm run test:direct-intake && npm run test:dropbox && npm run test:storage && npm run test:archive && npm run test:archive-ui && npm run test:auth && npm run test:auth-ui"

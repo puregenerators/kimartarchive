@@ -1,5 +1,10 @@
 "use client";
 
+/**
+ * Internal developer utility for local HR / web / thumbnail diagnostics.
+ * Not mounted in the archive UI — import only when testing processing locally.
+ */
+
 import { useEffect, useRef, useState } from "react";
 
 import { ProcessingResultPanel } from "@/components/artwork/ProcessingResultPanel";

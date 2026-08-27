@@ -1,16 +1,12 @@
-import Link from "next/link";
-
 import { ArchiveSetupClient } from "@/app/setup/archive/SetupArchiveClient";
+import { ARCHIVE_SETUP_COPY } from "@/lib/archive/setup-presentation";
 import { requireAuthenticatedPage } from "@/lib/auth/access";
-import { isVercelRuntime } from "@/lib/dropbox/credentials-logic";
 import { runDropboxDiagnostics } from "@/lib/dropbox/health";
-import { buildArchiveOverallStatus } from "@/lib/dropbox/status";
 import { runGoogleDiagnostics } from "@/lib/google/diagnostics";
 
 export const metadata = {
   title: "Archive Setup · Kim Artwork Archive",
-  description:
-    "Connect Google Sheets (metadata) and Dropbox (files) for this local archive.",
+  description: ARCHIVE_SETUP_COPY.intro,
 };
 
 export const dynamic = "force-dynamic";
@@ -32,12 +28,6 @@ export default async function SetupArchivePage({
     runGoogleDiagnostics(),
     runDropboxDiagnostics(),
   ]);
-
-  const googleSheetsReady = google.sheets.complete;
-  const overall = buildArchiveOverallStatus({
-    googleSheetsReady,
-    dropboxReady: dropbox.overall.ready,
-  });
 
   let flash: {
     kind: "success" | "error" | null;
@@ -64,20 +54,10 @@ export default async function SetupArchivePage({
         Kim Osgood Archive
       </p>
       <h1 className="mt-3 font-display text-4xl tracking-tight text-[var(--ink)]">
-        Archive setup
+        {ARCHIVE_SETUP_COPY.pageTitle}
       </h1>
       <p className="mt-4 max-w-2xl text-sm text-[var(--muted)] leading-relaxed">
-        Connect providers for this local archive. Google Sheets holds permanent
-        metadata; Dropbox holds artwork files. Credentials stay on the server
-        and are never shown here.
-      </p>
-      <p className="mt-2 text-sm">
-        <Link
-          href="/setup/google"
-          className="text-[var(--accent)] underline-offset-2 hover:underline"
-        >
-          Google sheet tools
-        </Link>
+        {ARCHIVE_SETUP_COPY.intro}
       </p>
 
       <div className="mt-10">
@@ -85,8 +65,6 @@ export default async function SetupArchivePage({
           google={google}
           dropbox={dropbox}
           flash={flash}
-          overall={overall}
-          localProcessingAvailable={!isVercelRuntime()}
         />
       </div>
     </main>

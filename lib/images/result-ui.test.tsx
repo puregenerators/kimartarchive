@@ -4,6 +4,10 @@
  * Run: npx tsx lib/images/result-ui.test.tsx
  */
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { ProcessingResultPanel } from "@/components/artwork/ProcessingResultPanel";
@@ -332,12 +336,38 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "local processing diagnostic lives on Archive setup, not Review Batch copy",
+    name: "local processing diagnostic is an internal utility, not Archive setup UI",
     run: () => {
+      const here = dirname(fileURLToPath(import.meta.url));
+      const setupClient = readFileSync(
+        join(here, "../../app/setup/archive/SetupArchiveClient.tsx"),
+        "utf8",
+      );
+      const setupPage = readFileSync(
+        join(here, "../../app/setup/archive/page.tsx"),
+        "utf8",
+      );
+      assert(
+        !setupClient.includes("LocalImageProcessingTest"),
+        "setup client does not mount the diagnostic",
+      );
+      assert(
+        !setupClient.includes("Local image processing"),
+        "setup client has no diagnostic heading",
+      );
+      assert(
+        !setupPage.includes("localProcessingAvailable"),
+        "setup page does not pass diagnostic availability",
+      );
+      assert(
+        !setupPage.includes("LocalImageProcessingTest"),
+        "setup page does not import the diagnostic",
+      );
+
       const available = renderToStaticMarkup(
         <LocalImageProcessingTest available />,
       );
-      assert(available.includes("Local image processing"), "setup heading");
+      assert(available.includes("Local image processing"), "utility heading");
       assert(available.includes("Process image"), "process action");
       assert(
         available.includes("not reused by Submit Batch"),

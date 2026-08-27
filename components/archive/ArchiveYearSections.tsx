@@ -15,7 +15,7 @@ export function ArchiveYearSections({
   deleteControlFor?: (artwork: ArchiveArtwork) => ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-24 md:gap-28">
+    <div className="flex flex-col gap-[4.5rem] md:gap-20">
       {groups
         .filter((group) => group.artworks.length > 0)
         .map((group) => (
@@ -25,7 +25,7 @@ export function ArchiveYearSections({
             className="flex scroll-mt-8 flex-col gap-8 md:scroll-mt-10"
           >
             <div className="flex flex-col gap-1">
-              <h2 className="font-display text-2xl tracking-tight text-[var(--ink-soft)] md:text-3xl">
+              <h2 className="font-display text-[1.75rem] leading-tight tracking-tight text-[var(--ink-soft)] md:text-[2.2rem]">
                 {group.year}
               </h2>
               <p className="text-xs tracking-wide text-[var(--muted)] md:hidden">
